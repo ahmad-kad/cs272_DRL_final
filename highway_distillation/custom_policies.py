@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-Custom Policies for Context-Aware Reinforcement Learning
-
-This module implements custom policy architectures that can condition behavior
-on contextual information, enabling robust generalization across different
-driving scenarios (highway, merge, intersection).
-
-Key Features:
-- Context-Aware Actor-Critic Policy: Separates kinematics processing from context
-- Modular architecture for easy extension
-- PyTorch-based implementation compatible with Stable-Baselines3
-"""
+"""Custom policies for multi-modal and context-aware RL."""
 
 import torch
 import torch.nn as nn
@@ -22,57 +11,27 @@ import numpy as np
 
 
 class MultiModalFeaturesExtractor(BaseFeaturesExtractor):
-    """
-    Multi-modal feature extractor for kinematics + lidar + visual observations.
+    """Multi-modal feature extractor for kinematics + lidar + visual."""
 
-    Architecture:
-    - Kinematics branch: Processes vehicle position/velocity data
-    - Lidar branch: Processes distance measurements from lidar sensor
-    - Visual branch: Processes grayscale image data
-    - Fusion: Combines all modalities for joint representation learning
-    """
-
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        kinematics_dim: int = 75,        # 15 vehicles × 5 features
-        lidar_dim: int = 64,             # 64 lidar rays
-        visual_dim: tuple = (84, 84, 1), # Visual dimensions
-        hidden_dim: int = 256,
-        fusion_dim: int = 512,
-    ):
-        """
-        Args:
-            observation_space: Dict space with 'kinematics', 'lidar', 'visual' keys
-            kinematics_dim: Flattened kinematics features
-            lidar_dim: Number of lidar rays
-            visual_dim: Visual observation dimensions (H, W, C)
-            hidden_dim: Hidden layer size for modality processing
-            fusion_dim: Hidden layer size for fused representation
-        """
+    def __init__(self, observation_space, kinematics_dim=75, lidar_dim=64,
+                 visual_dim=(84, 84, 1), hidden_dim=256, fusion_dim=512):
         super().__init__(observation_space, features_dim=fusion_dim)
 
-        # Kinematics processing branch
+        # Kinematics branch
         self.kinematics_net = nn.Sequential(
-            nn.Linear(kinematics_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            nn.Linear(kinematics_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()
         )
 
-        # Lidar processing branch (1D convolution for distance patterns)
+        # Lidar branch
         self.lidar_net = nn.Sequential(
-            nn.Conv1d(1, 32, kernel_size=5, stride=2),
-            nn.ReLU(),
-            nn.Conv1d(32, 64, kernel_size=3, stride=2),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),  # Global average pooling
-            nn.Flatten(),
-            nn.Linear(64, hidden_dim),
-            nn.ReLU(),
+            nn.Conv1d(1, 32, 5, 2), nn.ReLU(),
+            nn.Conv1d(32, 64, 3, 2), nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1), nn.Flatten(),
+            nn.Linear(64, hidden_dim), nn.ReLU()
         )
 
-        # Visual processing branch (CNN for image features)
+        # Visual branch
         self.visual_net = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=8, stride=4),
             nn.ReLU(),
