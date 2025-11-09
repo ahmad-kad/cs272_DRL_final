@@ -15,16 +15,19 @@ python highway_distillation/tests/test_training_pipeline.py
 ## Training
 
 ```bash
-# Quick test (10K timesteps each)
-TEST_MODE=true python highway_distillation/training/phase1_training.py
-TEST_MODE=true python highway_distillation/training/phase2_training.py
-TEST_MODE=true python highway_distillation/training/phase3_training.py
+# Quick test (10K timesteps each - ~5 minutes each)
+TEST_MODE=true python highway_distillation/training.py phase1
+TEST_MODE=true python highway_distillation/training.py phase2
+TEST_MODE=true python highway_distillation/training.py phase3
 
-# Full training (1M+ timesteps each)
-python highway_distillation/training/phase1_training.py
-python highway_distillation/training/phase2_training.py
-python highway_distillation/training/phase3_training.py
-python highway_distillation/training/phase4_validation.py
+# Or using direct function calls:
+TEST_MODE=true python -c "from highway_distillation.training import train_phase1, train_phase2, train_phase3; train_phase1(); train_phase2(); train_phase3()"
+
+# Full training (1M+ timesteps each - hours/days)
+python highway_distillation/training.py phase1  # 1M timesteps
+python highway_distillation/training.py phase2  # 2M timesteps
+python highway_distillation/training.py phase3  # 9M timesteps
+python highway_distillation/training/phase4_validation.py  # Validation
 ```
 
 ## Key Metrics

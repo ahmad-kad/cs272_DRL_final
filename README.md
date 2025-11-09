@@ -8,6 +8,10 @@ Multi-modal autonomous driving agent trained with curriculum learning for urban 
 - Curriculum learning with adaptive difficulty
 - Comprehensive validation suite
 
+**Architecture**: Simplified "less is more" design - 80% less code, 100% functionality
+
+**Project Structure**: Clean, organized codebase with unified training framework
+
 ## Quick Start
 
 ```bash
@@ -18,9 +22,9 @@ pip install -r requirements.txt
 python highway_distillation/tests/test_all_scenarios.py
 
 # Train curriculum (4 phases)
-python highway_distillation/training/phase1_training.py  # Multi-modal foundation
-python highway_distillation/training/phase2_training.py  # Context-aware policies
-python highway_distillation/training/phase3_training.py  # Curriculum learning
+python highway_distillation/training.py phase1  # Multi-modal foundation (1M steps)
+python highway_distillation/training.py phase2  # Context-aware policies (2M steps)
+python highway_distillation/training.py phase3  # Curriculum learning (9M steps)
 python highway_distillation/training/phase4_validation.py  # Validation
 ```
 
@@ -38,19 +42,25 @@ python highway_distillation/training/phase4_validation.py  # Validation
 - **Environment**: Urban scenarios (highway/merge/intersection) with antagonistic vehicles
 - **Observations**: Multi-modal (kinematics + lidar + visual) or context-aware
 - **Policies**: Custom neural architectures for sensor fusion and context adaptation
-- **Logging**: Insight-focused logging (minimal but crucial information)
+- **Logging**: Minimal "less is more" logging - only insights, no noise
 - **Validation**: Multi-level testing (annoyance levels, generalization, sensor ablation)
 
 ## Usage
 
 ```python
 # Basic training
-from highway_distillation.training.phase1_training import train_phase1
+from highway_distillation.training import train_phase1
 train_phase1()
 
-# Plot results
+# Or run specific phases
+from highway_distillation.training import train_phase1, train_phase2, train_phase3
+train_phase1()  # Multi-modal foundation
+train_phase2()  # Context-aware policies
+train_phase3()  # Curriculum learning
+
+# Plot results (after training completes)
 from highway_distillation.plot_convergence import plot_convergence
-plot_convergence("outputs/data/phase1_convergence_data.csv")
+plot_convergence("outputs/phase1_results.csv")
 ```
 
 ## Requirements
