@@ -25,129 +25,74 @@ from highway_env.road.road import Road
 logger = logging.getLogger(__name__)
 
 
-class AntagonisticVehicle:
-    """Mixin for antagonistic behavior. Injected annoyance level determines intensity."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Injected by environment at creation
-        self.annoyance_level = 0.5
-        self.behavior_state = "normal"  # Track current behavior mode
+class AntagonisticVehicle(AggressiveVehicle):
+    """Single antagonistic vehicle with configurable behavior types."""
+
+    def __init__(self, road, position, heading=0, speed=0, target_lane_index=None,
+                 target_speed=None, route=None, enable_lane_change=True, timer=None,
+                 data=None, behavior_type='random', annoyance_level=0.5):
+        super().__init__(road, position, heading, speed, target_lane_index, target_speed,
+                        route, enable_lane_change, timer, data)
+        self.behavior_type = behavior_type  # 'swerve', 'cutoff', 'random'
+        self.annoyance_level = annoyance_level
         self.behavior_timer = 0
 
-
-class SwervingVehicle(AntagonisticVehicle, AggressiveVehicle):
-    """Unpredictable lane changes. Intensity controlled by annoyance_level."""
-    
-    def __init__(self, road, position, heading=0, speed=0, target_lane_index=None,
-                 target_speed=None, route=None, enable_lane_change=True, timer=None, data=None):
-        super().__init__(road, position, heading, speed, target_lane_index, target_speed,
-                        route, enable_lane_change, timer, data)
-        self.swerve_timer = 0
-        self.swerve_direction = 1
-
     def act(self, action=None):
-        """Execute swerve behavior based on annoyance level."""
-        if self.behavior_timer <= 0:
-            # Swerve initiation chance increases with annoyance
-            swerve_chance = 0.08 * (0.5 + self.annoyance_level)  # 4-12%
-            
-            if np.random.random() < swerve_chance and self.enable_lane_change:
-                self.behavior_state = "swerving"
-                self.behavior_timer = int(15 + 25 * (1 - self.annoyance_level))  # 15-40 steps
-                self.swerve_direction = np.random.choice([-1, 1])
-        
-        # Execute swerve: use lane changes instead of position manipulation
-        if self.behavior_timer > 0:
-            self.behavior_timer -= 1
-            current_lane = self.lane_index[2]
-            new_lane = current_lane + self.swerve_direction
-            
-            # Check lane bounds with safety
+        """Unified antagonistic behavior logic."""
+        if self.annoyance_level < 0.1:
+            return super().act(action)  # Normal behavior
+
+        if self.behavior_type == 'swerve':
+            return self._act_swerve(action)
+        elif self.behavior_type == 'cutoff':
+            return self._act_cutoff(action)
+        else:  # random
+            return self._act_random(action)
+
+    def _act_swerve(self, action=None):
+        """Unpredictable lane changes."""
+        self.behavior_timer += 1
+        swerve_freq = max(50, int(200 / (self.annoyance_level + 0.1)))
+
+        if self.behavior_timer >= swerve_freq:
+            self.behavior_timer = 0
+            # Simple lane change attempt
             try:
-                num_lanes = len(self.road.network.graph[self.lane_index[:2]])
-                if 0 <= new_lane < num_lanes:
-                    self.target_lane_index = (self.lane_index[0], self.lane_index[1], new_lane)
-                    # Higher annoyance = more forceful lane changes
-                    if np.random.random() < 0.3 * self.annoyance_level:
-                        self.change_lane_policy()
-            except (KeyError, IndexError):
-                # Graceful fallback if lane structure is unexpected
-                pass
-        
+                current_lane = self.target_lane_index[2] if self.target_lane_index else 0
+                new_lane = 1 if current_lane == 0 else 0  # Toggle between lanes
+                if hasattr(self.road, 'network') and self.road.network:
+                    graph_key = self.lane_index[:2] if hasattr(self, 'lane_index') else (0, 0)
+                    lanes = self.road.network.graph.get(graph_key, {})
+                    if 0 <= new_lane < len(lanes):
+                        self.target_lane_index = (self.lane_index[0], self.lane_index[1], new_lane)
+            except:
+                pass  # Skip if lane change fails
+
         return super().act(action)
 
+    def _act_cutoff(self, action=None):
+        """Aggressive merging behavior."""
+        self.behavior_timer += 1
+        cutoff_freq = max(30, int(150 / (self.annoyance_level + 0.1)))
 
-class CutoffVehicle(AntagonisticVehicle, AggressiveVehicle):
-    """Aggressive merging and cutoffs. Safety margins decrease with annoyance."""
-    
-    def __init__(self, road, position, heading=0, speed=0, target_lane_index=None,
-                 target_speed=None, route=None, enable_lane_change=True, timer=None, data=None):
-        super().__init__(road, position, heading, speed, target_lane_index, target_speed,
-                        route, enable_lane_change, timer, data)
-        self.last_cutoff_time = -100
+        if self.behavior_timer >= cutoff_freq:
+            self.behavior_timer = 0
+            # Speed up to pass vehicles ahead
+            self.target_speed = min(self.target_speed + self.annoyance_level * 3, 35)
 
-    def act(self, action=None):
-        """Execute cutoff behavior. Aggression controlled by annoyance_level."""
-        current_time = getattr(self.road, 'simulation_time', 0)
-        
-        # Cutoff frequency increases with annoyance
-        cooldown = int(40 * (1 - 0.5 * self.annoyance_level))  # 20-40 steps
-        
-        if current_time - self.last_cutoff_time > cooldown:
-            vehicles_ahead = [v for v in self.road.vehicles
-                            if v is not self and v.position[0] > self.position[0]]
-            
-            for vehicle in vehicles_ahead:
-                gap = vehicle.position[0] - self.position[0]
-                
-                # Safety margin shrinks with annoyance
-                min_gap = 5 + (10 * (1 - self.annoyance_level))  # 5-15 meters
-                max_gap = 15 + (10 * self.annoyance_level)  # 15-25 meters
-                
-                cutoff_prob = 0.05 * (0.5 + self.annoyance_level)  # 2.5-7.5%
-                
-                if min_gap < gap < max_gap and np.random.random() < cutoff_prob:
-                    # Aggression: how much faster to go
-                    speed_factor = 1.05 + (0.15 * self.annoyance_level)  # 1.05-1.2x
-                    self.target_speed = min(self.MAX_SPEED, vehicle.speed * speed_factor)
-                    self.last_cutoff_time = current_time
-                    
-                    # More likely to force lane change when very annoying
-                    lane_offset_diff = np.linalg.norm(vehicle.lane_offset - self.lane_offset)
-                    if lane_offset_diff < 1 and \
-                       np.random.random() < (0.4 + 0.4 * self.annoyance_level):
-                        self.change_lane_policy()
-                    break
-        
         return super().act(action)
 
+    def _act_random(self, action=None):
+        """Erratic acceleration behavior."""
+        self.behavior_timer += 1
+        behavior_freq = max(20, int(100 / (self.annoyance_level + 0.1)))
 
-class RandomMovementVehicle(AntagonisticVehicle, IDMVehicle):
-    """Unpredictable acceleration/deceleration. Randomness controlled by annoyance."""
-    
-    def __init__(self, road, position, heading=0, speed=0, target_lane_index=None,
-                 target_speed=None, route=None, enable_lane_change=True, timer=None, data=None):
-        super().__init__(road, position, heading, speed, target_lane_index, target_speed,
-                        route, enable_lane_change, timer)
+        if self.behavior_timer >= behavior_freq:
+            self.behavior_timer = 0
+            # Random speed change
+            speed_change = np.random.uniform(-8, 8) * self.annoyance_level
+            self.target_speed = np.clip(self.target_speed + speed_change, 5, 40)
 
-    def act(self, action=None):
-        """Execute random movement behavior."""
-        # Random acceleration frequency increases with annoyance
-        accel_prob = 0.03 * (0.5 + self.annoyance_level)  # 1.5-4.5%
-        
-        if np.random.random() < accel_prob:
-            # Severity increases with annoyance
-            speed_range = 0.7 + (0.4 * self.annoyance_level)  # 0.7-1.1
-            random_factor = np.random.uniform(1 - speed_range, 1 + speed_range)
-            self.target_speed = self.target_speed * random_factor
-            self.target_speed = np.clip(self.target_speed, self.MIN_SPEED, self.MAX_SPEED)
-        
-        # Random lane changes (less frequent)
-        lane_change_prob = 0.01 * (0.5 + self.annoyance_level)  # 0.5-1.5%
-        if np.random.random() < lane_change_prob and self.enable_lane_change:
-            self.change_lane_policy()
-        
         return super().act(action)
 
 
@@ -294,80 +239,70 @@ class UrbanJunctionEnv(AbstractEnv):
 
     @classmethod
     def default_config(cls):
+        """Simplified configuration - essential parameters only."""
         config = super().default_config()
         config.update({
-            # Observation - configurable by user for different DRL experiments
+            # Core environment settings
+            "vehicles_count": 8,              # Traffic density (reduced for speed)
+            "duration": 200,                  # Episode length
+            "lanes_count": 2,
+
+            # Observation settings
             "observation": {
-                "type": "Kinematics",  # Base observation: "Kinematics", "LidarObservation", "GrayscaleObservation"
-                "multi_modal": False,  # Enable multi-modal with lidar + visual
+                "type": "Kinematics",
+                "multi_modal": False,         # Enable lidar + visual
                 "lidar_rays": 64,
                 "lidar_range": 50.0,
                 "visual_width": 84,
                 "visual_height": 84,
-                "vehicles_count": 15,
+                "vehicles_count": 8,
                 "features": ["presence", "x", "y", "vx", "vy"],
-                "absolute": False,
                 "normalize": True,
             },
-            # Action
-            "action": {
-                "type": "DiscreteMetaAction",
-            },
-            # Environment
-            "lanes_count": 2,
-            "vehicles_count": 15,
-            "vehicles_density": 1.0,
-            "duration": 200,  # Steps per episode
-            "ego_spacing": 7,
-            
+
+            # Action space
+            "action": {"type": "DiscreteMetaAction"},
+
             # Stage generation
-            "stage_mode": "random",  # 'random', 'deterministic', 'curriculum'
+            "stage_mode": "random",          # 'random', 'deterministic', 'curriculum'
             "min_stages": 2,
-            "max_stages": 5,
-            "stage_length_range": [100, 200],  # Meters per stage
-            
-            # Normalized dense reward structure
-            "collision_reward": 1.0,           # Terminal failure
-            "speed_reward": 0.4,                # Optimal speed maintenance
-            "speed_penalty_scale": 0.3,         # Sub-optimal speed
-            "progress_reward": 0.2,             # Forward progress scaling
-            "traffic_light_penalty": 0.4,       # Red light violation
-            "traffic_light_reward": 0.1,        # Green light compliance
-            "off_road_penalty": 0.3,            # Lane discipline
-            "success_reward": 2.0,              # Episode completion bonus
-            "stage_completion_reward": 0.5,     # Per-stage completion bonus
-            
-            # Speed targets
-            "reward_speed_range": [20, 30],  # m/s optimal range
-            
-            # Antagonistic traffic
-            "antagonistic_vehicles": True,
-            "swerving_vehicle_ratio": 0.25,
-            "cutoff_vehicle_ratio": 0.20,
-            "random_vehicle_ratio": 0.15,
-            
-            # Difficulty curriculum
-            "annoyance_level": 0.5,  # 0.0 (mild) to 1.0 (extreme)
-            "adaptive_difficulty": False,
-            "performance_threshold": 20.0,  # Trigger difficulty increase
-            "max_annoyance": 1.0,
-            
-            # Traffic light (for intersection stages)
+            "max_stages": 4,
+
+            # Rewards (normalized dense)
+            "collision_reward": -1.0,        # Terminal failure
+            "speed_reward": 0.4,             # Optimal speed (20-30 mph)
+            "speed_penalty": -0.3,           # Poor speed
+            "progress_reward": 0.2,          # Forward movement
+            "traffic_light_penalty": -0.4,   # Red light violation
+            "off_road_penalty": -0.3,        # Lane discipline
+            "success_reward": 2.0,           # Episode completion bonus
+
+            # Traffic difficulty
+            "antagonistic_vehicles": False,  # Enable hard traffic
+            "annoyance_level": 0.0,          # Difficulty scale (0.0-1.0)
+
+            # Technical defaults (hidden)
+            **cls._technical_defaults()
+        })
+        return config
+
+    @classmethod
+    def _technical_defaults(cls):
+        """Technical parameters users don't need to see."""
+        return {
+            "vehicles_density": 1.0,
+            "ego_spacing": 7,
+            "stage_length_range": [100, 200],
+            "reward_speed_range": [20, 30],
+            "normalize_reward": True,
+            "offroad_terminal": False,
             "traffic_light_green": 25,
             "traffic_light_yellow": 3,
             "traffic_light_red": 30,
-            
-            # Cross-traffic (for intersection stages)
             "crossing_vehicle_probability": 0.05,
             "crossing_vehicle_speed_range": [15, 25],
-            
-            # Merge scenario
-            "merge_aggression": 0.7,  # How aggressively vehicles merge
-            
-            "normalize_reward": True,
-            "offroad_terminal": False,  # Allow recovery from off-road
-        })
-        return config
+            "merge_aggression": 0.7,
+        }
 
     def define_spaces(self):
         """Override to support multi-modal observations."""
@@ -565,9 +500,6 @@ class UrbanJunctionEnv(AbstractEnv):
         self.success = False
         self.distance_traveled = 0.0
         self.initial_position = None
-        
-        logger.debug(f"Environment reset | Stages: {[s['type'] for s in self.stage_boundaries]} | "
-                    f"Total distance: {self.total_distance}m | Annoyance: {self.annoyance_level:.2f}")
 
         # Note: observation post-processing happens in step() and reset() wrappers
 
@@ -631,56 +563,44 @@ class UrbanJunctionEnv(AbstractEnv):
             self._create_standard_vehicles()
 
     def _create_antagonistic_vehicles(self):
-        """Spawn mix of antagonistic vehicle types with injected annoyance."""
-        type_specs = [
-            (SwervingVehicle, "swerving_vehicle_ratio", 0.25),
-            (CutoffVehicle, "cutoff_vehicle_ratio", 0.20),
-            (RandomMovementVehicle, "random_vehicle_ratio", 0.15),
-        ]
-        
+        """Spawn antagonistic vehicles with different behavior types."""
         total_vehicles = self.config["vehicles_count"]
-        vehicle_types = []
-        total_allocated = 0
-        
-        # Allocate vehicles by type
-        for vehicle_class, config_key, default_ratio in type_specs:
-            ratio = self.config.get(config_key, default_ratio)
-            count = int(total_vehicles * ratio)
-            vehicle_types.extend([vehicle_class] * count)
-            total_allocated += count
-        
-        # Fill remainder with IDM vehicles
-        remaining = total_vehicles - total_allocated
-        vehicle_types.extend([IDMVehicle] * remaining)
-        
-        # Shuffle for variety
-        np.random.shuffle(vehicle_types)
+
+        # Simple distribution: mix of behavior types
+        behaviors = ['swerve', 'cutoff', 'random']
+        vehicle_behaviors = []
+
+        # Distribute evenly across behavior types
+        for i in range(total_vehicles):
+            vehicle_behaviors.append(behaviors[i % len(behaviors)])
         
         # Create vehicles with injected annoyance
         created_count = 0
         failed_count = 0
-        
-        for vehicle_class in vehicle_types:
+
+        for behavior_type in vehicle_behaviors:
             try:
-                vehicle = vehicle_class.create_random(
-                    self.road,
-                    spacing=1.0 / self.config.get("vehicles_density", 1.0)
+                # Create vehicle with random parameters
+                lane_index = self.rng.choice(self.road.network.get_lanes())
+                longitudinal = self.rng.uniform(0, self.road.network.length)
+                speed = self.rng.uniform(15, 35)
+
+                vehicle = AntagonisticVehicle(
+                    road=self.road,
+                    position=np.array([longitudinal, lane_index[1]]),
+                    heading=0,
+                    speed=speed,
+                    target_lane_index=lane_index,
+                    behavior_type=behavior_type,
+                    annoyance_level=self.annoyance_level
                 )
-                
-                # Inject annoyance level for antagonistic vehicles
-                if isinstance(vehicle, AntagonisticVehicle):
-                    vehicle.annoyance_level = self.annoyance_level
-                
-                if hasattr(vehicle, 'randomize_behavior'):
-                    vehicle.randomize_behavior()
-                
+
                 self.road.vehicles.append(vehicle)
                 created_count += 1
-                
+
             except Exception as e:
                 failed_count += 1
-                logger.warning(f"Failed to create {vehicle_class.__name__}: {e}")
-                
+
                 # Fallback to IDM
                 try:
                     fallback = IDMVehicle.create_random(
@@ -693,7 +613,6 @@ class UrbanJunctionEnv(AbstractEnv):
                 except Exception as fb_e:
                     logger.error(f"Fallback creation failed: {fb_e}")
         
-        logger.debug(f"Created {created_count} vehicles | Failed: {failed_count}")
 
     def _create_standard_vehicles(self):
         """Fallback: create only IDM vehicles."""
@@ -720,11 +639,9 @@ class UrbanJunctionEnv(AbstractEnv):
                 if idx > 0 and not self.stage_boundaries[idx - 1]['completed']:
                     self.stage_boundaries[idx - 1]['completed'] = True
                     self.stages_completed_count += 1
-                    logger.debug(f"Stage {idx - 1} completed: {self.stage_boundaries[idx - 1]['type']}")
                 
                 # Log phase transition
                 if self.phase != old_phase:
-                    logger.debug(f"Phase transition: {old_phase} -> {self.phase}")
                     self.previous_phase = old_phase
                 
                 break
@@ -734,7 +651,6 @@ class UrbanJunctionEnv(AbstractEnv):
             if not self.stage_boundaries[-1]['completed']:
                 self.stage_boundaries[-1]['completed'] = True
                 self.stages_completed_count += 1
-                logger.debug(f"Final stage completed: {self.stage_boundaries[-1]['type']}")
 
     def _spawn_crossing_vehicle(self):
         """Spawn a vehicle crossing perpendicular (intersection phase only)."""
@@ -752,59 +668,38 @@ class UrbanJunctionEnv(AbstractEnv):
             self.road.vehicles.append(crossing_vehicle)
             
         except Exception as e:
-            logger.debug(f"Could not spawn crossing vehicle: {e}")
+            pass
 
     def _reward(self, action):
-        """
-        Calculate normalized dense reward for stable DRL training.
-        All reward components scaled to similar magnitudes.
-        
-        Reward structure:
-        - Collision: -1.0 (terminal)
-        - Speed maintenance: +0.4 (optimal) to -0.3 (sub-optimal)
-        - Progress: 0.0 to +0.2 (scaled by speed)
-        - Traffic light compliance: -0.4 (violation) to +0.1 (compliance)
-        - Lane discipline: -0.3 (off-road)
-        - Stage completion: +0.5 per stage
-        
-        Total per-step range: approximately [-1.0, +0.7]
-        """
-        # Terminal collision penalty
+        """Calculate dense reward signal."""
+        # Safety first (most important)
         if self.vehicle.crashed:
-            return -self.config["collision_reward"]
-        
+            return -1.0
+
         reward = 0.0
         speed = self.vehicle.speed
-        min_speed, max_speed = self.config["reward_speed_range"]
-        
-        # Speed reward: encourage optimal speed range
-        if min_speed <= speed <= max_speed:
-            reward += self.config["speed_reward"]
+
+        # Speed optimization (20-30 mph optimal range)
+        if 20 <= speed <= 30:
+            reward += 0.4
         else:
-            # Penalty for sub-optimal speed (too slow or too fast)
-            distance_from_range = min(abs(speed - min_speed), abs(speed - max_speed))
-            penalty = (distance_from_range / 10.0) * self.config["speed_penalty_scale"]
-            reward -= min(penalty, self.config["speed_penalty_scale"])
-        
-        # Progress reward: scaled by speed to encourage fast movement
-        speed_ratio = np.clip(speed / max_speed, 0.0, 1.0)
-        reward += self.config["progress_reward"] * speed_ratio
-        
-        # Traffic light compliance (intersection phase only)
-        if self.phase == "intersection":
+            reward -= 0.3
+
+        # Progress bonus
+        reward += speed * 0.02
+
+        # Traffic compliance (intersection only)
+        if hasattr(self, 'phase') and self.phase == "intersection":
             light_state = self.traffic_light.get_state()
-            if light_state == 0 and speed > 1.0:  # Running red light
-                reward -= self.config["traffic_light_penalty"]
-            elif light_state == 2 and speed > 5.0:  # Obeying green light with movement
-                reward += self.config["traffic_light_reward"]
-        
-        # Lane discipline: penalty for going off-road
+            if light_state == 0 and speed > 1.0:  # Red light violation
+                reward -= 0.4
+            elif light_state == 2 and speed > 5.0:  # Green light compliance
+                reward += 0.1
+
+        # Lane discipline
         if not self.vehicle.on_road:
-            reward -= self.config["off_road_penalty"]
-        
-        # Stage completion bonus (awarded once per stage)
-        # This is handled in _step() to avoid double counting
-        
+            reward -= 0.3
+
         return reward
 
     def _is_terminated(self):
@@ -827,8 +722,6 @@ class UrbanJunctionEnv(AbstractEnv):
             self.success = True
             # Add success bonus
             self.episode_reward += self.config["success_reward"]
-            logger.debug(f"Episode success | Stages: {self.stages_completed_count}/{len(self.stage_boundaries)} | "
-                        f"Total reward: {self.episode_reward:.2f}")
         
         return truncated
 
@@ -856,7 +749,6 @@ class UrbanJunctionEnv(AbstractEnv):
         if stages_completed_this_step > 0:
             stage_bonus = self.config["stage_completion_reward"] * stages_completed_this_step
             reward += stage_bonus
-            logger.debug(f"Stage completion bonus: +{stage_bonus:.2f}")
         
         # Track cumulative reward
         self.episode_reward += reward

@@ -102,11 +102,13 @@ PHASE_CONFIGS = {
         'name': 'phase1',
         'timesteps': 10000 if os.getenv('TEST_MODE') else 1000000,  # 10K for testing, 1M for real
         'env_config': {
-            'multi_modal': True,
-            'lidar_rays': 64,
-            'lidar_range': 50.0,
-            'visual_width': 84,
-            'visual_height': 84,
+            'observation': {
+                'multi_modal': True,
+                'lidar_rays': 64,
+                'lidar_range': 50.0,
+                'visual_width': 84,
+                'visual_height': 84,
+            },
             'vehicles_count': 8,
             'stage_mode': 'deterministic',
             'antagonistic_vehicles': False,
