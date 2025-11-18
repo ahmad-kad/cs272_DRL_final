@@ -52,8 +52,12 @@ PHASES = {
         'timesteps': 10000 if os.getenv('TEST_MODE') else 1000000,
         'env_overrides': {
             'multi_modal': True,
-            'stage_mode': 'deterministic',
-            'antagonistic_vehicles': False,
+            'stage_mode': 'curriculum',         # Non-deterministic curriculum learning
+            'antagonistic_vehicles': True,      # Enable early for robustness
+            'annoyance_level': 0.3,             # Mild difficulty to start
+            'num_antagonistic': 2,              # Add parameter for vehicle count
+            'modality_dropout': 0.15,           # Start with mild dropout
+            'kinematics_dropout_allowed': False, # Don't drop kinematics yet
         },
         'policy': 'MultiModal',
     },
@@ -62,7 +66,11 @@ PHASES = {
         'timesteps': 20000 if os.getenv('TEST_MODE') else 2000000,
         'env_overrides': {
             'stage_mode': 'random',
-            'antagonistic_vehicles': False,
+            'antagonistic_vehicles': True,
+            'annoyance_level': 0.5,             # Medium difficulty
+            'num_antagonistic': 3,
+            'modality_dropout': 0.25,           # Increase dropout
+            'kinematics_dropout_allowed': True, # Allow kinematics dropout
         },
         'policy': 'ContextAware',
     },
@@ -72,7 +80,10 @@ PHASES = {
         'env_overrides': {
             'stage_mode': 'curriculum',
             'antagonistic_vehicles': True,
-            'annoyance_level': 0.7,
+            'annoyance_level': 0.9,             # Maximum difficulty
+            'num_antagonistic': 4,
+            'modality_dropout': 0.3,            # High dropout for robustness
+            'kinematics_dropout_allowed': True, # Full sensor independence
         },
         'policy': 'ContextAware',
     }

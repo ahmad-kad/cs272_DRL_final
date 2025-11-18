@@ -10,11 +10,41 @@ from pathlib import Path
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecNormalize, VecFrameStack, DummyVecEnv
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 
 from environments.urban_junction_env import UrbanJunctionEnv
 from custom_policies import MultiModalActorCriticPolicy, ContextAwareActorCriticPolicy
 from training.training_logger import SimpleLogger
+
+
+class EpisodeLoggerCallback(BaseCallback):
+    """Callback for logging episode results."""
+
+    def __init__(self, episode_logger, verbose=0):
+        super().__init__(verbose)
+        self.episode_logger = episode_logger
+        self.episode_reward = 0
+        self.episode_length = 0
+
+    def _on_step(self) -> bool:
+        # Accumulate reward and length
+        self.episode_reward += self.locals.get('rewards', [0])[0]
+        self.episode_length += 1
+
+        # Check if episode is done
+        dones = self.locals.get('dones', [False])
+        if dones[0]:  # Episode ended
+            # Determine success (episode completed without collision)
+            success = self.episode_reward > 0  # Simple success criteria
+
+            # Log the episode
+            self.episode_logger.log_episode(self.episode_reward, success)
+
+            # Reset for next episode
+            self.episode_reward = 0
+            self.episode_length = 0
+
+        return True
 
 
 def create_environment(config):
@@ -77,7 +107,8 @@ def train_phase(phase_config):
     use_wandb = os.getenv('USE_WANDB', 'true').lower() == 'true'
     logger = SimpleLogger(phase_config['name'], use_wandb=use_wandb)
 
-    # Create checkpoint callback
+    # Create callbacks
+    episode_callback = EpisodeLoggerCallback(episode_logger=logger)
     checkpoint_callback = CheckpointCallback(
         save_freq=max(1000, phase_config['timesteps'] // 10),
         save_path=f"outputs/models/{phase_config['name']}",
@@ -88,10 +119,7 @@ def train_phase(phase_config):
     total_timesteps = phase_config['timesteps']
     model.learn(
         total_timesteps=total_timesteps,
-        callback=lambda locals, globals: logger.log_episode(
-            locals.get('episode_reward', 0),
-            locals.get('episode_reward', 0) > 0  # Simple success criteria
-        )
+        callback=[episode_callback, checkpoint_callback]
     )
 
     # Save final model and results

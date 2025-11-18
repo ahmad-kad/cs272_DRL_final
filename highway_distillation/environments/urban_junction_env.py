@@ -33,21 +33,43 @@ class AntagonisticVehicle(AggressiveVehicle):
                  data=None, behavior_type='random', annoyance_level=0.5):
         super().__init__(road, position, heading, speed, target_lane_index, target_speed,
                         route, enable_lane_change, timer, data)
-        self.behavior_type = behavior_type  # 'swerve', 'cutoff', 'random'
+        # Enhanced behavior types for more realistic traffic
+        self.available_behaviors = [
+            'tailgater',      # Follows too closely
+            'weaving',        # Unpredictable lane changes
+            'sudden_brake',   # Emergency braking
+            'speed_demon',    # Excessive speeding
+            'random',         # Original erratic behavior
+            'swerve',         # Original swerve behavior
+            'cutoff'          # Original cutoff behavior
+        ]
+        self.behavior_type = behavior_type if behavior_type in self.available_behaviors else 'random'
         self.annoyance_level = annoyance_level
         self.behavior_timer = 0
+        self.brake_cooldown = 0  # Prevent constant braking
 
     def act(self, action=None):
-        """Unified antagonistic behavior logic."""
+        """Enhanced antagonistic behavior logic with more realistic traffic patterns."""
         if self.annoyance_level < 0.1:
             return super().act(action)  # Normal behavior
 
-        if self.behavior_type == 'swerve':
-            return self._act_swerve(action)
-        elif self.behavior_type == 'cutoff':
-            return self._act_cutoff(action)
-        else:  # random
-            return self._act_random(action)
+        # Update cooldown timers
+        if self.brake_cooldown > 0:
+            self.brake_cooldown -= 1
+
+        # Route to specific behavior implementations
+        behavior_map = {
+            'tailgater': self._act_tailgater,
+            'weaving': self._act_weaving,
+            'sudden_brake': self._act_sudden_brake,
+            'speed_demon': self._act_speed_demon,
+            'swerve': self._act_swerve,
+            'cutoff': self._act_cutoff,
+            'random': self._act_random
+        }
+
+        behavior_func = behavior_map.get(self.behavior_type, self._act_random)
+        return behavior_func(action)
 
     def _act_swerve(self, action=None):
         """Unpredictable lane changes."""
@@ -92,6 +114,62 @@ class AntagonisticVehicle(AggressiveVehicle):
             # Random speed change
             speed_change = np.random.uniform(-8, 8) * self.annoyance_level
             self.target_speed = np.clip(self.target_speed + speed_change, 5, 40)
+
+        return super().act(action)
+
+    def _act_tailgater(self, action=None):
+        """Follows too closely, creating dangerous situations."""
+        self.behavior_timer += 1
+        tailgate_freq = max(100, int(300 / (self.annoyance_level + 0.1)))
+
+        if self.behavior_timer >= tailgate_freq:
+            self.behavior_timer = 0
+            # Speed up to close gap with vehicle ahead
+            self.target_speed = min(self.target_speed + self.annoyance_level * 5, 35)
+
+        return super().act(action)
+
+    def _act_weaving(self, action=None):
+        """Unpredictable lane weaving."""
+        self.behavior_timer += 1
+        weave_freq = max(30, int(120 / (self.annoyance_level + 0.1)))
+
+        if self.behavior_timer >= weave_freq:
+            self.behavior_timer = 0
+            # Rapid lane changes
+            try:
+                current_lane = self.target_lane_index[2] if self.target_lane_index else 0
+                new_lane = 1 if current_lane == 0 else 0
+                if hasattr(self.road, 'network') and self.road.network:
+                    graph_key = self.lane_index[:2] if hasattr(self, 'lane_index') else (0, 0)
+                    lanes = self.road.network.graph.get(graph_key, {})
+                    if 0 <= new_lane < len(lanes):
+                        self.target_lane_index = (self.lane_index[0], self.lane_index[1], new_lane)
+            except:
+                pass
+
+        return super().act(action)
+
+    def _act_sudden_brake(self, action=None):
+        """Emergency braking behavior."""
+        if self.brake_cooldown == 0:
+            brake_chance = self.annoyance_level * 0.1  # 10% chance at max annoyance
+            if np.random.random() < brake_chance:
+                # Emergency brake
+                self.target_speed = max(self.target_speed * 0.3, 2)  # Sudden stop
+                self.brake_cooldown = 50  # Cooldown before next brake
+
+        return super().act(action)
+
+    def _act_speed_demon(self, action=None):
+        """Excessive speeding."""
+        self.behavior_timer += 1
+        speed_freq = max(200, int(500 / (self.annoyance_level + 0.1)))
+
+        if self.behavior_timer >= speed_freq:
+            self.behavior_timer = 0
+            # Speed up dangerously
+            self.target_speed = min(self.target_speed + self.annoyance_level * 8, 45)
 
         return super().act(action)
 
@@ -276,6 +354,7 @@ class UrbanJunctionEnv(AbstractEnv):
             "traffic_light_penalty": -0.4,   # Red light violation
             "off_road_penalty": -0.3,        # Lane discipline
             "success_reward": 2.0,           # Episode completion bonus
+            "stage_success_bonus": 5.0,     # Bonus for completing all three stages
 
             # Traffic difficulty
             "antagonistic_vehicles": False,  # Enable hard traffic
@@ -515,14 +594,29 @@ class UrbanJunctionEnv(AbstractEnv):
 
             # Apply dropout during training if enabled (for robustness)
             dropout_rate = self.config.get("modality_dropout", 0.0)
-            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
-                # Randomly drop out modalities for robustness training
+            kinematics_dropout_allowed = self.config.get("kinematics_dropout_allowed", False)
+
+            # Check for evaluation-specific dropout masks
+            dropout_mask = self.config.get("observation", {}).get("dropout_mask", {})
+
+            if dropout_mask:
+                # Evaluation mode: specific modality dropout
+                if dropout_mask.get('kinematics', False):
+                    kinematics_flat *= 0.0
+                if dropout_mask.get('lidar', False):
+                    lidar_norm *= 0.0
+                if dropout_mask.get('visual', False):
+                    visual_norm *= 0.0
+            elif dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Training mode: random dropout for robustness
                 dropout_choice = np.random.random()
-                if dropout_choice < 0.33:
+                if dropout_choice < 0.25:
                     lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
-                elif dropout_choice < 0.66:
+                elif dropout_choice < 0.5:
                     visual_norm *= 0.0  # Drop visual (camera failure/dirt)
-                # Note: Never drop kinematics as it's essential for basic driving
+                elif dropout_choice < 0.75 and kinematics_dropout_allowed:
+                    kinematics_flat *= 0.0  # Drop kinematics (force sensor independence)
+                # If kinematics dropout not allowed or chosen, keep all modalities
 
             # Concatenate into single tensor
             obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
@@ -677,35 +771,204 @@ class UrbanJunctionEnv(AbstractEnv):
         except Exception as e:
             pass
 
+    def _get_min_vehicle_distance(self):
+        """Get minimum distance to any other vehicle."""
+        min_distance = float('inf')
+        ego_pos = self.vehicle.position
+
+        for vehicle in self.road.vehicles:
+            if vehicle is self.vehicle:
+                continue
+            distance = np.linalg.norm(vehicle.position - ego_pos)
+            min_distance = min(min_distance, distance)
+
+        return min_distance if min_distance != float('inf') else 50.0  # Default max range
+
+    def _is_lane_changing(self):
+        """Check if vehicle is currently changing lanes."""
+        if not hasattr(self, 'previous_lane'):
+            self.previous_lane = getattr(self.vehicle, 'target_lane_index', None)
+            return False
+
+        current_lane = getattr(self.vehicle, 'target_lane_index', None)
+        if current_lane and self.previous_lane:
+            lane_changed = current_lane != self.previous_lane
+            self.previous_lane = current_lane
+            return lane_changed
+        return False
+
+    def _get_lane_change_safety_distance(self):
+        """Get minimum distance during lane change."""
+        # Simplified: check distance to vehicles in target lane
+        min_distance = float('inf')
+        ego_pos = self.vehicle.position
+
+        for vehicle in self.road.vehicles:
+            if vehicle is self.vehicle:
+                continue
+            # Check if vehicle is in similar lateral position (same lane area)
+            lateral_distance = abs(vehicle.position[1] - ego_pos[1])
+            if lateral_distance < 4.0:  # Within lane width
+                longitudinal_distance = abs(vehicle.position[0] - ego_pos[0])
+                min_distance = min(min_distance, longitudinal_distance)
+
+        return min_distance if min_distance != float('inf') else 30.0
+
+    def _get_merge_gap_ahead(self):
+        """Get available gap for merging."""
+        ego_pos = self.vehicle.position
+        ego_lane = getattr(self.vehicle, 'target_lane_index', (0, 0, 0))
+
+        # Find vehicles in the target lane ahead
+        vehicles_ahead = []
+        for vehicle in self.road.vehicles:
+            if vehicle is self.vehicle:
+                continue
+            vehicle_lane = getattr(vehicle, 'target_lane_index', (0, 0, 0))
+            if vehicle_lane[2] == ego_lane[2]:  # Same lane
+                if vehicle.position[0] > ego_pos[0]:  # Ahead
+                    vehicles_ahead.append(vehicle)
+
+        if not vehicles_ahead:
+            return 50.0  # No vehicles ahead
+
+        # Find closest vehicle ahead
+        closest_ahead = min(vehicles_ahead, key=lambda v: v.position[0])
+        gap = closest_ahead.position[0] - ego_pos[0]
+
+        return max(gap, 0)  # Ensure non-negative
+
+    def _get_traffic_speed_ahead(self):
+        """Get average speed of traffic ahead."""
+        ego_pos = self.vehicle.position
+        ego_lane = getattr(self.vehicle, 'target_lane_index', (0, 0, 0))
+
+        vehicles_ahead = []
+        for vehicle in self.road.vehicles:
+            if vehicle is self.vehicle:
+                continue
+            vehicle_lane = getattr(vehicle, 'target_lane_index', (0, 0, 0))
+            if vehicle_lane[2] == ego_lane[2]:  # Same lane
+                if vehicle.position[0] > ego_pos[0]:  # Ahead
+                    vehicles_ahead.append(vehicle.speed)
+
+        if vehicles_ahead:
+            return sum(vehicles_ahead) / len(vehicles_ahead)
+        return 25.0  # Default traffic speed
+
+    def _is_stage_success(self):
+        """Check if all three stages (highway, merge, intersection) were completed."""
+        if not hasattr(self, 'stages_completed') or not self.stages_completed:
+            return False
+
+        required_stages = {'highway', 'merge', 'intersection'}
+        completed_stages = set(self.stages_completed.keys())
+        return required_stages.issubset(completed_stages)
+
     def _reward(self, action):
-        """Calculate dense reward signal."""
-        # Safety first (most important)
+        """Enhanced reward function with harsh penalties for real-world driving."""
+        # Terminal crash penalty - highest priority
         if self.vehicle.crashed:
-            return -1.0
+            return -5.0  # Much harsher crash penalty
 
         reward = 0.0
         speed = self.vehicle.speed
 
-        # Speed optimization (20-30 mph optimal range)
-        if 20 <= speed <= 30:
-            reward += 0.4
-        else:
-            reward -= 0.3
+        # ===== SAFETY FIRST =====
 
-        # Progress bonus
-        reward += speed * 0.02
+        # Critical proximity penalties (most important)
+        min_distance = self._get_min_vehicle_distance()
+        if min_distance < 3.0:
+            reward -= 2.5  # Critical proximity - almost crash
+        elif min_distance < 5.0:
+            reward -= 1.2  # Danger zone
+        elif min_distance < 8.0:
+            reward -= 0.5  # Warning distance
+        elif min_distance > 15.0:
+            reward += 0.1  # Good following distance
 
-        # Traffic compliance (intersection only)
-        if hasattr(self, 'phase') and self.phase == "intersection":
+        # Lane change safety (extremely important)
+        if self._is_lane_changing():
+            lane_change_distance = self._get_lane_change_safety_distance()
+            if lane_change_distance < 4.0:
+                reward -= 2.0  # Unsafe lane change
+            elif lane_change_distance < 6.0:
+                reward -= 0.8  # Risky lane change
+
+        # ===== HIGHWAY-SPECIFIC RULES =====
+
+        if self.phase == "highway":
+            # Stricter following distances at high speeds
+            if speed > 25 and min_distance < 10.0:
+                reward -= 1.0  # Highway tailgating
+            elif speed > 20 and min_distance < 8.0:
+                reward -= 0.6
+
+            # Speed stability on highway
+            if hasattr(self, 'previous_speed'):
+                speed_change = abs(speed - self.previous_speed)
+                if speed_change > 5.0:
+                    reward -= 0.4  # Erratic speed changes
+
+        # ===== MERGING RULES =====
+
+        elif self.phase == "merge":
+            # Gap acceptance and yielding
+            gap_ahead = self._get_merge_gap_ahead()
+            if gap_ahead < 12.0 and speed > 18:
+                reward -= 1.5  # Too fast for available gap
+            elif gap_ahead < 8.0:
+                reward -= 2.0  # Impossible merge
+
+            # Check for cutting off traffic
+            traffic_speed = self._get_traffic_speed_ahead()
+            if speed > traffic_speed + 8:
+                reward -= 1.0  # Aggressive merging
+
+        # ===== INTERSECTION RULES =====
+
+        elif self.phase == "intersection":
             light_state = self.traffic_light.get_state()
-            if light_state == 0 and speed > 1.0:  # Red light violation
-                reward -= 0.4
-            elif light_state == 2 and speed > 5.0:  # Green light compliance
-                reward += 0.1
+            if light_state == 0:  # Red light
+                if speed > 1.0:
+                    reward -= 2.0  # Much harsher red light penalty
+                else:
+                    reward += 0.2  # Small bonus for stopping
+            elif light_state == 1:  # Yellow light
+                if speed > 5.0:
+                    reward -= 1.2  # Yellow light caution
+            elif light_state == 2:  # Green light
+                if speed > 8.0:
+                    reward += 0.15  # Green light compliance bonus
 
-        # Lane discipline
+        # ===== BASIC DRIVING =====
+
+        # Speed optimization with safety bounds
+        if 18 <= speed <= 32:  # Slightly wider optimal range
+            reward += 0.4
+        elif speed > 35:
+            reward -= 1.0  # Excessive speed penalty
+        elif speed < 15 and self.phase != "intersection":
+            reward -= 0.5  # Too slow penalty
+        else:
+            reward -= 0.4  # Mild speed penalty
+
+        # Progress bonus (capped to prevent speed demons)
+        progress_bonus = min(speed * 0.015, 0.5)
+        reward += progress_bonus
+
+        # Lane discipline - harsher
         if not self.vehicle.on_road:
-            reward -= 0.3
+            reward -= 1.0  # Much harsher off-road penalty
+
+        # ===== LONG-TERM INCENTIVES =====
+
+        # Survival bonus for long episodes
+        survival_bonus = min(self.steps * 0.0003, 0.3)
+        reward += survival_bonus
+
+        # Track speed for next step
+        self.previous_speed = speed
 
         return reward
 
@@ -717,19 +980,23 @@ class UrbanJunctionEnv(AbstractEnv):
         """Episode truncates at time limit or when all stages completed."""
         # Time limit truncation
         time_truncated = self.steps >= self.config["duration"]
-        
+
         # Stage completion truncation
         pos = self.vehicle.position[0]
         stages_truncated = pos >= self.total_distance
-        
+
         truncated = time_truncated or stages_truncated
-        
-        if truncated and not self.vehicle.crashed:
-            # Success: completed episode without crashing
-            self.success = True
-            # Add success bonus
-            self.episode_reward += self.config["success_reward"]
-        
+
+        if truncated:
+            # Success: completed ALL THREE stages without crashing and staying on road
+            self.success = (self._is_stage_success() and
+                          not self.vehicle.crashed and
+                          self.vehicle.on_road)
+            if self.success:
+                # Higher success bonus for completing all stages
+                stage_success_bonus = self.config.get("stage_success_bonus", 5.0)
+                self.episode_reward += stage_success_bonus
+
         return truncated
 
     def step(self, action):
@@ -750,14 +1017,29 @@ class UrbanJunctionEnv(AbstractEnv):
 
             # Apply dropout during training if enabled (for robustness)
             dropout_rate = self.config.get("modality_dropout", 0.0)
-            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
-                # Randomly drop out modalities for robustness training
+            kinematics_dropout_allowed = self.config.get("kinematics_dropout_allowed", False)
+
+            # Check for evaluation-specific dropout masks
+            dropout_mask = self.config.get("observation", {}).get("dropout_mask", {})
+
+            if dropout_mask:
+                # Evaluation mode: specific modality dropout
+                if dropout_mask.get('kinematics', False):
+                    kinematics_flat *= 0.0
+                if dropout_mask.get('lidar', False):
+                    lidar_norm *= 0.0
+                if dropout_mask.get('visual', False):
+                    visual_norm *= 0.0
+            elif dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Training mode: random dropout for robustness
                 dropout_choice = np.random.random()
-                if dropout_choice < 0.33:
+                if dropout_choice < 0.25:
                     lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
-                elif dropout_choice < 0.66:
+                elif dropout_choice < 0.5:
                     visual_norm *= 0.0  # Drop visual (camera failure/dirt)
-                # Note: Never drop kinematics as it's essential for basic driving
+                elif dropout_choice < 0.75 and kinematics_dropout_allowed:
+                    kinematics_flat *= 0.0  # Drop kinematics (force sensor independence)
+                # If kinematics dropout not allowed or chosen, keep all modalities
 
             # Concatenate into single tensor
             obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
@@ -829,14 +1111,29 @@ class UrbanJunctionEnv(AbstractEnv):
 
             # Apply dropout during training if enabled (for robustness)
             dropout_rate = self.config.get("modality_dropout", 0.0)
-            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
-                # Randomly drop out modalities for robustness training
+            kinematics_dropout_allowed = self.config.get("kinematics_dropout_allowed", False)
+
+            # Check for evaluation-specific dropout masks
+            dropout_mask = self.config.get("observation", {}).get("dropout_mask", {})
+
+            if dropout_mask:
+                # Evaluation mode: specific modality dropout
+                if dropout_mask.get('kinematics', False):
+                    kinematics_flat *= 0.0
+                if dropout_mask.get('lidar', False):
+                    lidar_norm *= 0.0
+                if dropout_mask.get('visual', False):
+                    visual_norm *= 0.0
+            elif dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Training mode: random dropout for robustness
                 dropout_choice = np.random.random()
-                if dropout_choice < 0.33:
+                if dropout_choice < 0.25:
                     lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
-                elif dropout_choice < 0.66:
+                elif dropout_choice < 0.5:
                     visual_norm *= 0.0  # Drop visual (camera failure/dirt)
-                # Note: Never drop kinematics as it's essential for basic driving
+                elif dropout_choice < 0.75 and kinematics_dropout_allowed:
+                    kinematics_flat *= 0.0  # Drop kinematics (force sensor independence)
+                # If kinematics dropout not allowed or chosen, keep all modalities
 
             # Concatenate into single tensor
             obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
