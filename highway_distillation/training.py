@@ -14,30 +14,38 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 
 from environments.urban_junction_env import UrbanJunctionEnv
 from custom_policies import MultiModalActorCriticPolicy, ContextAwareActorCriticPolicy
-from training_logger import SimpleLogger
+from training.training_logger import SimpleLogger
 
 
 def create_environment(config):
     """Create environment with given configuration."""
     env_config = UrbanJunctionEnv.default_config()
     env_config.update(config)
-    env = UrbanJunctionEnv(env_config)
 
-    # Standard RL wrappers
-    env = Monitor(env, filename=os.path.join("outputs", "logs", f"{config.get('phase', 'unknown')}", "monitor.csv"))
-    env = VecFrameStack(env, n_stack=2)
+    def make_env():
+        env = UrbanJunctionEnv(env_config)
+        # Skip Monitor for Phase 1 multi-modal due to compatibility issues
+        if not (hasattr(env, 'config') and env.config.get("observation", {}).get("multi_modal", False)):
+            env = Monitor(env, filename=os.path.join("outputs", "logs", f"{config.get('phase', 'unknown')}", "monitor.csv"))
+        return env
+
+    # Create vectorized environment for all phases
+    env = DummyVecEnv([make_env])
+
+    # Use VecNormalize for all phases to ensure consistent buffer sizing
     env = VecNormalize(env, norm_obs=True, norm_reward=True)
 
     return env
 
 
-def create_model(model_config, env):
+def create_model(model_config, env, phase_name='unknown'):
     """Create model with given configuration."""
     policy_class = {
         'MultiModal': MultiModalActorCriticPolicy,
         'ContextAware': ContextAwareActorCriticPolicy,
     }.get(model_config['policy'], MultiModalActorCriticPolicy)
 
+    # ✅ NOW SAFE: Use PPO consistently for ALL phases (vectorized)
     model = PPO(
         policy_class,
         env,
@@ -65,8 +73,9 @@ def train_phase(phase_config):
 
     # Create components
     env = create_environment(phase_config['env_config'])
-    model = create_model(phase_config['model_config'], env)
-    logger = SimpleLogger(phase_config['name'])
+    model = create_model(phase_config['model_config'], env, phase_config['name'])
+    use_wandb = os.getenv('USE_WANDB', 'true').lower() == 'true'
+    logger = SimpleLogger(phase_config['name'], use_wandb=use_wandb)
 
     # Create checkpoint callback
     checkpoint_callback = CheckpointCallback(
@@ -88,7 +97,9 @@ def train_phase(phase_config):
     # Save final model and results
     os.makedirs(f"outputs/models/{phase_config['name']}", exist_ok=True)
     model.save(f"outputs/models/{phase_config['name']}/final")
-    env.save(f"outputs/models/{phase_config['name']}/vec_normalize.pkl")
+    # Save VecNormalize if it exists (Phase 2 only)
+    if hasattr(env, 'save'):
+        env.save(f"outputs/models/{phase_config['name']}/vec_normalize.pkl")
 
     logger.save_results()
 
@@ -103,21 +114,26 @@ PHASE_CONFIGS = {
         'timesteps': 10000 if os.getenv('TEST_MODE') else 1000000,  # 10K for testing, 1M for real
         'env_config': {
             'observation': {
+                'type': 'Kinematics',
                 'multi_modal': True,
                 'lidar_rays': 64,
                 'lidar_range': 50.0,
                 'visual_width': 84,
                 'visual_height': 84,
+                'vehicles_count': 8,
+                'features': ['presence', 'x', 'y', 'vx', 'vy'],
+                'normalize': True,
             },
             'vehicles_count': 8,
             'stage_mode': 'deterministic',
             'antagonistic_vehicles': False,
             'duration': 200,
+            'modality_dropout': 0.2,  # 20% chance to drop modalities for robustness
         },
         'model_config': {
             'policy': 'MultiModal',
             'learning_rate': 3e-4,
-            'policy_kwargs': {'features_dim': 512},
+            'policy_kwargs': {'features_extractor_kwargs': {'kinematics_dim': 40, 'lidar_dim': 64, 'visual_dim': (84, 84, 1), 'fusion_dim': 512}},
         }
     },
 
@@ -133,7 +149,7 @@ PHASE_CONFIGS = {
         'model_config': {
             'policy': 'ContextAware',
             'learning_rate': 3e-4,
-            'policy_kwargs': {'features_dim': 256},
+            'policy_kwargs': {'features_extractor_kwargs': {'kinematics_features': 40, 'fusion_dim': 256}},
         }
     },
 
@@ -150,7 +166,7 @@ PHASE_CONFIGS = {
         'model_config': {
             'policy': 'ContextAware',
             'learning_rate': 3e-4,
-            'policy_kwargs': {'features_dim': 256},
+            'policy_kwargs': {'features_extractor_kwargs': {'kinematics_features': 40, 'fusion_dim': 256}},
         }
     }
 }

@@ -60,13 +60,13 @@ def test_phase1_environment_setup():
     logger.info(f"  Multi-modal: enabled")
     logger.info(f"  Observation space: {env.observation_space}")
 
-    # Verify multi-modal structure
-    assert isinstance(env.observation_space, spaces.Dict), "Observation should be Dict"
-    assert 'kinematics' in env.observation_space.spaces, "Missing kinematics"
-    assert 'lidar' in env.observation_space.spaces, "Missing lidar"
-    assert 'visual' in env.observation_space.spaces, "Missing visual"
+    # Verify multi-modal structure (now flattened into single tensor)
+    assert isinstance(env.observation_space, spaces.Box), "Observation should be Box"
+    # Calculate expected size: kinematics(40) + lidar(64) + visual(84*84) = 7160
+    expected_size = 40 + 64 + 84*84  # kinematics + lidar + visual
+    assert env.observation_space.shape[0] == expected_size, f"Expected {expected_size} features, got {env.observation_space.shape[0]}"
 
-    logger.info("✓ Multi-modal observation structure verified")
+    logger.info("✓ Multi-modal flattened observation structure verified")
 
     # Test observation generation (multi-modal verified in scenario tests)
     for step in range(10):

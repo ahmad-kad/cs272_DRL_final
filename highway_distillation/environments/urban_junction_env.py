@@ -280,6 +280,7 @@ class UrbanJunctionEnv(AbstractEnv):
             # Traffic difficulty
             "antagonistic_vehicles": False,  # Enable hard traffic
             "annoyance_level": 0.0,          # Difficulty scale (0.0-1.0)
+            "modality_dropout": 0.0,         # Random modality dropout (0.0-1.0) for robustness
 
             # Technical defaults (hidden)
             **cls._technical_defaults()
@@ -305,55 +306,48 @@ class UrbanJunctionEnv(AbstractEnv):
         }
 
     def define_spaces(self):
-        """Override to support multi-modal observations."""
+        """Override to support multi-modal observations with consistent spaces."""
+        # Always call parent to set up action space and basic attributes
         super().define_spaces()
 
-        # Check if multi-modal observation is requested
+        # For multi-modal, we need to temporarily create an environment to get the actual kinematics size
         if self.config["observation"].get("multi_modal", False):
-            # Create multi-modal observation space
-            lidar_space = spaces.Box(
-                low=0,
-                high=self.config["observation"]["lidar_range"],
-                shape=(self.config["observation"]["lidar_rays"],),
+            # Create a temporary environment to get the actual kinematics observation size
+            import copy
+            temp_config = copy.deepcopy(self.config)
+            temp_config["observation"]["multi_modal"] = False  # Disable multi-modal temporarily
+            temp_env = type(self)(temp_config)
+            temp_obs, _ = temp_env.reset()
+            kinematics_size = temp_obs.flatten().shape[0]
+            temp_env.close()
+
+            lidar_size = self.config["observation"]["lidar_rays"]
+            visual_size = (self.config["observation"]["visual_height"] *
+                          self.config["observation"]["visual_width"])
+
+            total_size = kinematics_size + lidar_size + visual_size
+
+            # Override with consistent observation space for multi-modal
+            self._observation_space = spaces.Box(
+                low=-np.inf,  # All modalities normalized to similar ranges
+                high=np.inf,
+                shape=(total_size,),
                 dtype=np.float32
             )
 
-            visual_space = spaces.Box(
-                low=0,
-                high=255,
-                shape=(self.config["observation"]["visual_height"],
-                       self.config["observation"]["visual_width"], 1),
-                dtype=np.uint8
-            )
-
-            # Get the original observation space for kinematics
-            original_space = self.observation_space
-
-            self.observation_space = spaces.Dict({
-                'kinematics': original_space,
-                'lidar': lidar_space,
-                'visual': visual_space,
-            })
-
-    def _step(self, action):
-        """Override step to handle multi-modal observations."""
-        # Call parent step
-        obs, reward, terminated, truncated, info = super()._step(action)
-
-        # Post-process observation if multi-modal
+    @property
+    def observation_space(self):
+        """Override observation_space property to ensure correct space for multi-modal."""
         if self.config["observation"].get("multi_modal", False):
-            # Get additional observations
-            lidar_obs = self._get_lidar_observation()
-            visual_obs = self._get_visual_observation()
+            # Use the stored observation space from define_spaces
+            return self._observation_space
+        else:
+            return self._observation_space
 
-            # Replace the observation with multi-modal version
-            obs = {
-                'kinematics': obs,  # Original observation becomes kinematics
-                'lidar': lidar_obs,
-                'visual': visual_obs,
-            }
-
-        return obs, reward, terminated, truncated, info
+    @observation_space.setter
+    def observation_space(self, value):
+        """Setter for observation_space."""
+        self._observation_space = value
 
     def _get_lidar_observation(self):
         """Generate simulated lidar observation."""
@@ -504,7 +498,7 @@ class UrbanJunctionEnv(AbstractEnv):
         # Note: observation post-processing happens in step() and reset() wrappers
 
     def reset(self, **kwargs):
-        """Override reset to handle multi-modal observations."""
+        """Override reset to handle multi-modal observations with dropout support."""
         obs, info = super().reset(**kwargs)
 
         # Post-process observation if multi-modal
@@ -513,12 +507,25 @@ class UrbanJunctionEnv(AbstractEnv):
             lidar_obs = self._get_lidar_observation()
             visual_obs = self._get_visual_observation()
 
-            # Create multi-modal observation
-            obs = {
-                'kinematics': obs,  # Original observation becomes kinematics
-                'lidar': lidar_obs,
-                'visual': visual_obs,
-            }
+            # Flatten and concatenate all modalities
+            kinematics_flat = obs.flatten().astype(np.float32)
+            lidar_norm = lidar_obs.astype(np.float32) / self.config["observation"]["lidar_range"]  # Normalize to [0, 1]
+            visual_norm = visual_obs.flatten().astype(np.float32) / 255.0  # Normalize to [0, 1]
+
+
+            # Apply dropout during training if enabled (for robustness)
+            dropout_rate = self.config.get("modality_dropout", 0.0)
+            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Randomly drop out modalities for robustness training
+                dropout_choice = np.random.random()
+                if dropout_choice < 0.33:
+                    lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
+                elif dropout_choice < 0.66:
+                    visual_norm *= 0.0  # Drop visual (camera failure/dirt)
+                # Note: Never drop kinematics as it's essential for basic driving
+
+            # Concatenate into single tensor
+            obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
 
         return obs, info
 
@@ -725,6 +732,38 @@ class UrbanJunctionEnv(AbstractEnv):
         
         return truncated
 
+    def step(self, action):
+        """Override step to handle multi-modal observations with dropout support."""
+        # Call parent step
+        obs, reward, terminated, truncated, info = super().step(action)
+
+        # Post-process observation if multi-modal
+        if self.config["observation"].get("multi_modal", False):
+            # Get additional observations
+            lidar_obs = self._get_lidar_observation()
+            visual_obs = self._get_visual_observation()
+
+            # Flatten and concatenate all modalities
+            kinematics_flat = obs.flatten().astype(np.float32)
+            lidar_norm = lidar_obs.astype(np.float32) / self.config["observation"]["lidar_range"]  # Normalize to [0, 1]
+            visual_norm = visual_obs.flatten().astype(np.float32) / 255.0  # Normalize to [0, 1]
+
+            # Apply dropout during training if enabled (for robustness)
+            dropout_rate = self.config.get("modality_dropout", 0.0)
+            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Randomly drop out modalities for robustness training
+                dropout_choice = np.random.random()
+                if dropout_choice < 0.33:
+                    lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
+                elif dropout_choice < 0.66:
+                    visual_norm *= 0.0  # Drop visual (camera failure/dirt)
+                # Note: Never drop kinematics as it's essential for basic driving
+
+            # Concatenate into single tensor
+            obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
+
+        return obs, reward, terminated, truncated, info
+
     def _step(self, action):
         """Execute one environment step."""
         # Track stage completions for rewards
@@ -779,14 +818,29 @@ class UrbanJunctionEnv(AbstractEnv):
         
         # Post-process observation if multi-modal
         if self.config["observation"].get("multi_modal", False):
+            # Get additional observations
             lidar_obs = self._get_lidar_observation()
             visual_obs = self._get_visual_observation()
-            obs = {
-                'kinematics': obs,
-                'lidar': lidar_obs,
-                'visual': visual_obs,
-            }
-        
+
+            # Flatten and concatenate all modalities
+            kinematics_flat = obs.flatten().astype(np.float32)
+            lidar_norm = lidar_obs.astype(np.float32) / self.config["observation"]["lidar_range"]  # Normalize to [0, 1]
+            visual_norm = visual_obs.flatten().astype(np.float32) / 255.0  # Normalize to [0, 1]
+
+            # Apply dropout during training if enabled (for robustness)
+            dropout_rate = self.config.get("modality_dropout", 0.0)
+            if dropout_rate > 0.0 and np.random.random() < dropout_rate:
+                # Randomly drop out modalities for robustness training
+                dropout_choice = np.random.random()
+                if dropout_choice < 0.33:
+                    lidar_norm *= 0.0  # Drop lidar (sensor failure/occlusion)
+                elif dropout_choice < 0.66:
+                    visual_norm *= 0.0  # Drop visual (camera failure/dirt)
+                # Note: Never drop kinematics as it's essential for basic driving
+
+            # Concatenate into single tensor
+            obs = np.concatenate([kinematics_flat, lidar_norm, visual_norm])
+
         return obs, reward, terminated, truncated, info
 
     def _get_stage_progress(self):

@@ -31,9 +31,10 @@ class MultiModalFeaturesExtractor(BaseFeaturesExtractor):
             nn.Linear(64, hidden_dim), nn.ReLU()
         )
 
-        # Visual branch
+        # Visual branch - input channels from visual_dim (assuming format H, W, C)
+        input_channels = visual_dim[2] if len(visual_dim) >= 3 else 1
         self.visual_net = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=8, stride=4),
+            nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
@@ -58,30 +59,42 @@ class MultiModalFeaturesExtractor(BaseFeaturesExtractor):
         self.lidar_dim = lidar_dim
         self.visual_dim = visual_dim
 
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, observations) -> torch.Tensor:
         """
-        Process multi-modal observations through the fusion architecture.
+        Process flattened multi-modal observations through the fusion architecture.
 
         Args:
-            observations: Dict with 'kinematics', 'lidar', 'visual' tensors
+            observations: Flattened tensor with concatenated [kinematics, lidar, visual]
 
         Returns:
             Fused feature representation
         """
+        # Split the flattened observation back into modalities
+        batch_size = observations.size(0)
+
+        # Calculate sizes for each modality
+        kinematics_size = self.kinematics_dim
+        lidar_size = self.lidar_dim
+        visual_size = self.visual_dim[0] * self.visual_dim[1] * self.visual_dim[2]  # height * width * channels
+
+        # Split the tensor
+        kinematics_obs = observations[:, :kinematics_size]
+        lidar_obs = observations[:, kinematics_size:kinematics_size + lidar_size]
+        visual_obs = observations[:, kinematics_size + lidar_size:]
+
         # Process kinematics branch
-        kinematics_obs = observations["kinematics"]
-        if kinematics_obs.dim() > 2:
-            kinematics_obs = kinematics_obs.view(kinematics_obs.size(0), -1)
         kinematics_features = self.kinematics_net(kinematics_obs)
 
         # Process lidar branch
-        lidar_obs = observations["lidar"]
         if lidar_obs.dim() == 2:  # Add channel dimension for Conv1d
             lidar_obs = lidar_obs.unsqueeze(1)
         lidar_features = self.lidar_net(lidar_obs)
 
-        # Process visual branch
-        visual_obs = observations["visual"]
+        # Process visual branch - reshape to (batch, height, width, channels) then to (batch, channels, height, width)
+        visual_height, visual_width, visual_channels = self.visual_dim
+        visual_obs = visual_obs.view(batch_size, visual_height, visual_width, visual_channels)
+        visual_obs = visual_obs.permute(0, 3, 1, 2)  # (batch, height, width, channels) -> (batch, channels, height, width)
+
         visual_features = self.visual_net(visual_obs)
 
         # Fuse all modalities
@@ -106,6 +119,10 @@ class ContextAwareFeaturesExtractor(BaseFeaturesExtractor):
     ):
         super().__init__(observation_space, features_dim=fusion_dim)
 
+        # Store parameters for use in forward method
+        self.kinematics_features = kinematics_features
+        self.context_features = context_features
+
         # Kinematics processing
         self.kinematics_net = nn.Sequential(
             nn.Linear(kinematics_features, hidden_dim),
@@ -128,14 +145,28 @@ class ContextAwareFeaturesExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
 
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
-        kinematics = observations["kinematics"]
-        if kinematics.dim() > 2:
-            kinematics = kinematics.view(kinematics.size(0), -1)
-        k_features = self.kinematics_net(kinematics)
+    def forward(self, observations) -> torch.Tensor:
+        # Handle both dict (multi-modal) and tensor (simple kinematics) inputs
+        if isinstance(observations, dict) and "kinematics" in observations:
+            # Dict format with kinematics and context
+            kinematics = observations["kinematics"]
+            if kinematics.dim() > 2:
+                kinematics = kinematics.view(kinematics.size(0), -1)
+            k_features = self.kinematics_net(kinematics)
 
-        context = observations["context"]
-        c_features = self.context_net(context)
+            context = observations["context"]
+            c_features = self.context_net(context)
+        else:
+            # Simple tensor format - treat as kinematics only
+            kinematics = observations
+            if kinematics.dim() > 2:
+                kinematics = kinematics.view(kinematics.size(0), -1)
+            k_features = self.kinematics_net(kinematics)
+
+            # Use default context (zeros) when no context provided
+            batch_size = kinematics.size(0)
+            context = torch.zeros(batch_size, self.context_features, device=kinematics.device)
+            c_features = self.context_net(context)
 
         combined = torch.cat([k_features, c_features], dim=1)
         return self.fusion_net(combined)
