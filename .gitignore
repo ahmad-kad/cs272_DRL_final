@@ -116,3 +116,8 @@ tmp/
 *.bak
 *.backup
 *~
+
+# Project-specific
+highway_distillation/outputs/
+*.monitor.csv
+plots/

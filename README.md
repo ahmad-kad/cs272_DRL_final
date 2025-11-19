@@ -1,14 +1,6 @@
 # Urban Junction Environment
 
-Highway environment for autonomous driving research with procedural scenario generation and adversarial traffic.
-
-## Features
-
-- **Procedural Generation**: Varied road layouts, traffic patterns, and environmental conditions
-- **Multi-Scenario Support**: Highway, merge, and intersection scenarios
-- **Adversarial Traffic**: Intelligent vehicles that challenge the ego vehicle
-- **Multi-modal Observations**: Lidar and visual observations available
-- **Highway-Env Integration**: Built on the established highway-env framework
+A highway environment for autonomous driving research with procedural scenario generation and adversarial traffic.
 
 ## Installation
 
@@ -16,53 +8,70 @@ Highway environment for autonomous driving research with procedural scenario gen
 pip install -r requirements.txt
 ```
 
-## Requirements
-
-- Python 3.8+
-- highway-env>=1.8.2
-- gymnasium>=0.29.0
-- numpy>=1.24.0
-
-## Usage
+## Quick Start
 
 ```python
 from highway_distillation.environments.urban_junction_env import UrbanJunctionEnv
 
 # Create environment
-env = UrbanJunctionEnv(
-    config={
-        'scenario': 'highway',  # 'highway', 'merge', or 'intersection'
-        'observation_type': 'lidar',  # 'lidar' or 'grayscale'
-        'duration': 60,
-        'vehicles_count': 10
-    }
-)
+env = UrbanJunctionEnv(config={
+    'scenario': 'highway',        # 'highway', 'merge', or 'intersection'
+    'observation_type': 'lidar',  # 'lidar' or 'grayscale'
+    'duration': 60,               # episode length in seconds
+    'vehicles_count': 10          # number of other vehicles
+})
 
-# Reset and step
+# Use the environment
 obs, info = env.reset()
-action = env.action_space.sample()  # Your policy here
+action = env.action_space.sample()  # 5 discrete actions
 obs, reward, terminated, truncated, info = env.step(action)
 ```
 
-## Environment Configuration
+## Environment Details
 
-- **scenario**: Type of driving scenario (`'highway'`, `'merge'`, `'intersection'`)
-- **observation_type**: Sensor modality (`'lidar'`, `'grayscale'`)
-- **duration**: Episode length in seconds
-- **vehicles_count**: Number of other vehicles
-- **lidar_rays**: Number of lidar rays (for lidar observations)
-- **visual_height/width**: Image dimensions (for grayscale observations)
+### Actions (5 discrete)
+- `LANE_LEFT`, `LANE_RIGHT`, `FASTER`, `SLOWER`, `IDLE`
 
-## Scenarios
+### Observations
+- **Lidar**: 8 nearby vehicles (position, speed, presence) + optional context = 40-43 features
+- **Grayscale**: Visual input with configurable dimensions
+- **Frame stacking**: Optional 2-frame history
 
+### Rewards
+- Good speed (20-30 mph): +0.4
+- Bad speed: -0.3
+- Progress: +0.02 × speed
+- Collision: -1.0 (episode ends)
+- Red light violation: -0.4
+- Off-road: -0.3
+- Stage complete: +0.5
+- Episode success: +2.0
+
+### Scenarios
 - **Highway**: Straight road with varying lane counts and traffic
 - **Merge**: Highway with on-ramp merging scenarios
 - **Intersection**: Urban intersection with crossing traffic
 
-## Research Applications
+## Training
 
-This environment is designed for:
-- Reinforcement learning research
-- Autonomous driving algorithm development
-- Multi-modal sensor fusion studies
-- Adversarial scenario testing
+Train baseline agents:
+
+```bash
+# Quick test
+python train_all_baselines.py --mode quick --env highway-v0 --obs Lidar --device cpu
+
+# Full training across all environments and observation types
+python train_all_baselines.py --all --mode standard --device cuda
+```
+
+## Project Structure
+
+```
+├── highway_distillation/
+│   ├── environments/          # Urban Junction environment
+│   ├── training/              # Training utilities
+│   └── tests/                 # Test suites
+├── train_*.py                 # Training scripts
+├── run_*.py                   # Evaluation and utility scripts
+└── requirements.txt           # Dependencies
+```
