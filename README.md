@@ -1,78 +1,68 @@
-# Urban Junction RL Agent
+# Urban Junction Environment
 
-Multi-modal autonomous driving agent trained with curriculum learning for urban scenarios (highway, merge, intersection) with adversarial traffic.
+Highway environment for autonomous driving research with procedural scenario generation and adversarial traffic.
 
-**Key Features:**
-- Multi-modal observations: kinematics + lidar + visual
-- Context-aware policies for scenario adaptation
-- Curriculum learning with adaptive difficulty
-- Comprehensive validation suite
+## Features
 
-**Architecture**: TESTED "less is more" design - 80% less code, 100% functionality
+- **Procedural Generation**: Varied road layouts, traffic patterns, and environmental conditions
+- **Multi-Scenario Support**: Highway, merge, and intersection scenarios
+- **Adversarial Traffic**: Intelligent vehicles that challenge the ego vehicle
+- **Multi-modal Observations**: Lidar and visual observations available
+- **Highway-Env Integration**: Built on the established highway-env framework
 
-**Project Structure**: VERIFIED Clean, organized codebase with unified training framework
-
-## Quick Start
+## Installation
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Verify setup
-python highway_distillation/tests/test_all_scenarios.py
-
-# Train curriculum (4 phases)
-python highway_distillation/training.py phase1  # Multi-modal foundation (1M steps)
-python highway_distillation/training.py phase2  # Context-aware policies (2M steps)
-python highway_distillation/training.py phase3  # Curriculum learning (9M steps)
-python highway_distillation/training/phase4_validation.py  # Validation
-```
-
-## Training Phases
-
-| Phase | Focus | Timesteps | Key Feature |
-|-------|-------|-----------|-------------|
-| 1 | Multi-modal foundation | 1M | Sensor fusion (kinematics + lidar + visual) |
-| 2 | Context awareness | 2M | Scenario-specific behaviors |
-| 3 | Curriculum learning | 6M | Adaptive difficulty + adversarial traffic |
-| 4 | Validation | - | Comprehensive testing suite |
-
-## Key Components
-
-- **Environment**: TESTED Simplified urban scenarios (highway/merge/intersection) with unified antagonistic vehicle system
-- **Observations**: VERIFIED Multi-modal (kinematics + lidar + visual) or context-aware
-- **Policies**: VALIDATED Custom neural architectures for sensor fusion and context adaptation
-- **Logging**: WORKING Minimal "less is more" logging - only insights, no noise
-- **Validation**: COMPREHENSIVE Multi-level testing (annoyance levels, generalization, sensor ablation)
-
-## Usage
-
-```python
-# Basic training
-from highway_distillation.training import train_phase1
-train_phase1()
-
-# Or run specific phases
-from highway_distillation.training import train_phase1, train_phase2, train_phase3
-train_phase1()  # Multi-modal foundation
-train_phase2()  # Context-aware policies
-train_phase3()  # Curriculum learning
-
-# Plot results (after training completes)
-from highway_distillation.plot_convergence import plot_convergence
-plot_convergence("outputs/phase1_results.csv")
 ```
 
 ## Requirements
 
 - Python 3.8+
-- PyTorch
-- Gymnasium
-- Stable Baselines3
-- NumPy, Pandas, Matplotlib
+- highway-env>=1.8.2
+- gymnasium>=0.29.0
+- numpy>=1.24.0
 
-## Troubleshooting
+## Usage
 
-**PyTorch CUDA issues**: Ensure compatible CUDA version
-**Gymnasium conflicts**: `pip install "gymnasium>=1.0.0,<2.0.0"`
-**Memory issues**: Reduce batch size or model dimensions
+```python
+from highway_distillation.environments.urban_junction_env import UrbanJunctionEnv
+
+# Create environment
+env = UrbanJunctionEnv(
+    config={
+        'scenario': 'highway',  # 'highway', 'merge', or 'intersection'
+        'observation_type': 'lidar',  # 'lidar' or 'grayscale'
+        'duration': 60,
+        'vehicles_count': 10
+    }
+)
+
+# Reset and step
+obs, info = env.reset()
+action = env.action_space.sample()  # Your policy here
+obs, reward, terminated, truncated, info = env.step(action)
+```
+
+## Environment Configuration
+
+- **scenario**: Type of driving scenario (`'highway'`, `'merge'`, `'intersection'`)
+- **observation_type**: Sensor modality (`'lidar'`, `'grayscale'`)
+- **duration**: Episode length in seconds
+- **vehicles_count**: Number of other vehicles
+- **lidar_rays**: Number of lidar rays (for lidar observations)
+- **visual_height/width**: Image dimensions (for grayscale observations)
+
+## Scenarios
+
+- **Highway**: Straight road with varying lane counts and traffic
+- **Merge**: Highway with on-ramp merging scenarios
+- **Intersection**: Urban intersection with crossing traffic
+
+## Research Applications
+
+This environment is designed for:
+- Reinforcement learning research
+- Autonomous driving algorithm development
+- Multi-modal sensor fusion studies
+- Adversarial scenario testing

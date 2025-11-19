@@ -1,18 +1,4 @@
-# Core RL and environment dependencies
-stable-baselines3>=2.1.0
+# Core environment dependencies
 highway-env>=1.8.2
 gymnasium>=0.29.0
-
-# Data science and utilities
 numpy>=1.24.0
-pandas>=2.0.0
-matplotlib>=3.7.0
-
-# Logging and monitoring (PyTorch-compatible)
-# tensorboard>=2.14.0  # Removed to avoid TensorFlow dependency
-
-# Development tools
-pytest>=7.4.0
-black>=23.0.0
-flake8>=6.0.0
-mypy>=1.5.0
