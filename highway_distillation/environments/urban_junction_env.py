@@ -351,11 +351,31 @@ class UrbanJunctionEnv(AbstractEnv):
         self.use_lidar_only = use_lidar_only
         self.use_grayscale_only = use_grayscale_only
         
+        # Update config to use proper observation type
+        if config is None:
+            config = self.default_config()
+        
+        if self.use_lidar_only:
+            config["observation"] = {
+                "type": "LidarObservation",
+                "cells": 32,
+                "maximum_range": 50.0,  # Match vanilla highway-env standard
+                "normalize": True
+            }
+        elif self.use_grayscale_only:
+            config["observation"] = {
+                "type": "GrayscaleObservation", 
+                "observation_shape": (64, 64),
+                "stack_size": 4,
+                "weights": [0.2989, 0.5870, 0.1140]
+            }
+        
         # Now call parent with cleaned kwargs
         super().__init__(config, **kwargs)
 
         import gymnasium as gym
         
+        # Override observation space to match our optimized sizes
         if self.use_lidar_only:
             # Optimized Lidar: 32 rays (Fast & Sufficient)
             self.observation_space = gym.spaces.Box(

@@ -29,44 +29,76 @@ except ImportError:
 
 
 class WandBCallback(BaseCallback):
-    """Enhanced WandB callback with comprehensive logging."""
+    """Enhanced WandB callback with comprehensive logging for vectorized environments."""
 
-    def __init__(self, agent_type: str, log_freq: int = 500, verbose: int = 0):
+    def __init__(self, agent_type: str, log_freq: int = 250, verbose: int = 0):
         super().__init__(verbose)
         self.agent_type = agent_type
         self.log_freq = log_freq
         self.episode_rewards = []
         self.episode_lengths = []
-        self.current_episode_reward = 0
-        self.current_episode_length = 0
+        self.num_envs = None  # Will be set on first step
+        self.episodes_completed_this_interval = 0
 
     def _on_step(self) -> bool:
-        # Accumulate episode data
-        self.current_episode_reward += self.locals['rewards'][0] if len(self.locals['rewards']) > 0 else 0
-        self.current_episode_length += 1
+        # Get environment data
+        dones = self.locals.get('dones', np.array([]))
+        rewards = self.locals.get('rewards', np.array([]))
 
-        # Check if episode ended
-        dones = self.locals.get('dones', [False])
-        if dones[0] if len(dones) > 0 else False:
-            # Episode ended
-            self.episode_rewards.append(self.current_episode_reward)
-            self.episode_lengths.append(self.current_episode_length)
+        # Initialize per-environment tracking on first step
+        if self.num_envs is None:
+            self.num_envs = len(dones) if len(dones) > 0 else 1
+            # Initialize tracking for each environment
+            for env_idx in range(self.num_envs):
+                setattr(self, f'current_reward_{env_idx}', 0.0)
+                setattr(self, f'current_length_{env_idx}', 0)
+                setattr(self, f'env_episode_rewards_{env_idx}', [])
 
-            # Keep only recent episodes for rolling stats
-            if len(self.episode_rewards) > 100:
-                self.episode_rewards = self.episode_rewards[-100:]
-                self.episode_lengths = self.episode_lengths[-100:]
+        # Track episodes for each environment
+        for env_idx in range(self.num_envs):
+            if env_idx >= len(rewards):
+                continue
 
-            # Reset for next episode
-            self.current_episode_reward = 0
-            self.current_episode_length = 0
+            # Accumulate reward and length for this environment
+            current_reward = getattr(self, f'current_reward_{env_idx}')
+            current_length = getattr(self, f'current_length_{env_idx}')
+
+            current_reward += rewards[env_idx]
+            current_length += 1
+
+            setattr(self, f'current_reward_{env_idx}', current_reward)
+            setattr(self, f'current_length_{env_idx}', current_length)
+
+            # Check if episode ended for this environment
+            if env_idx < len(dones) and dones[env_idx]:
+                # Episode completed
+                env_episode_rewards = getattr(self, f'env_episode_rewards_{env_idx}')
+                env_episode_rewards.append(current_reward)
+                self.episode_rewards.append(current_reward)
+                self.episode_lengths.append(current_length)
+                self.episodes_completed_this_interval += 1
+
+                # Keep only recent episodes (global and per-environment)
+                if len(self.episode_rewards) > 100:
+                    self.episode_rewards = self.episode_rewards[-100:]
+                    self.episode_lengths = self.episode_lengths[-100:]
+
+                # Keep per-environment episodes for rolling stats
+                if len(env_episode_rewards) > 50:
+                    env_episode_rewards[:] = env_episode_rewards[-50:]
+
+                # Reset for next episode in this environment
+                setattr(self, f'current_reward_{env_idx}', 0.0)
+                setattr(self, f'current_length_{env_idx}', 0)
 
         # Log at regular intervals
         if self.n_calls % self.log_freq == 0:
             metrics = {
-                "timesteps": self.num_timesteps,
-                "updates": self.n_calls,
-                "agent_type": self.agent_type
+                "train/timesteps": self.num_timesteps,
+                "train/updates": self.n_calls,
+                "train/agent_type": self.agent_type,
+                "train/parallel_envs": self.num_envs,
+                "train/episodes_this_interval": self.episodes_completed_this_interval
             }
 
             # PPO-specific metrics
@@ -76,27 +108,37 @@ class WandBCallback(BaseCallback):
                            'train/entropy_loss', 'train/approx_kl', 'train/clip_fraction',
                            'train/learning_rate', 'train/n_updates']:
                     if key in logs:
-                        clean_key = key.replace('train/', '')
+                        clean_key = key.replace('train/', 'train/ppo_')
                         metrics[clean_key] = logs[key]
 
-            # Episode statistics (rolling averages)
+            # Episode statistics (rolling averages from all environments)
             if self.episode_rewards:
-                recent_rewards = self.episode_rewards[-20:]  # Last 20 episodes
+                recent_rewards = self.episode_rewards[-20:]  # Last 20 episodes across all envs
                 recent_lengths = self.episode_lengths[-20:]
+                all_rewards = self.episode_rewards
 
                 metrics.update({
-                    "episode_avg_reward": np.mean(recent_rewards),
-                    "episode_best_reward": np.max(recent_rewards) if recent_rewards else 0,
-                    "episode_avg_length": np.mean(recent_lengths),
-                    "episode_count": len(self.episode_rewards),
-                    "episode_reward_std": np.std(recent_rewards) if len(recent_rewards) > 1 else 0,
+                    "rewards/episode_mean": np.mean(recent_rewards),
+                    "rewards/episode_best": np.max(recent_rewards),
+                    "rewards/episode_worst": np.min(recent_rewards),
+                    "rewards/episode_std": np.std(recent_rewards) if len(recent_rewards) > 1 else 0,
+                    "rewards/all_time_best": np.max(all_rewards),
+                    "episode/length_mean": np.mean(recent_lengths),
+                    "episode/total_count": len(self.episode_rewards),
                 })
 
-            # Learning progress indicators
-            if len(self.episode_rewards) > 10:
-                early_avg = np.mean(self.episode_rewards[:10])
-                recent_avg = np.mean(self.episode_rewards[-10:])
-                metrics["learning_improvement"] = recent_avg - early_avg
+                # Learning progress indicators
+                if len(self.episode_rewards) > 10:
+                    early_avg = np.mean(self.episode_rewards[:10])
+                    recent_avg = np.mean(recent_rewards)
+                    metrics["rewards/learning_improvement"] = recent_avg - early_avg
+                    
+                    # Calculate success rate (episodes with positive reward)
+                    positive_episodes = sum(1 for r in recent_rewards if r > 0)
+                    metrics["episode/success_rate"] = positive_episodes / len(recent_rewards)
+
+            # Reset interval counter
+            self.episodes_completed_this_interval = 0
 
             # Log to wandb
             wandb.log(metrics, step=self.num_timesteps)
@@ -107,11 +149,11 @@ class WandBCallback(BaseCallback):
         """Log final training summary."""
         if self.episode_rewards:
             final_metrics = {
-                "final_avg_reward": np.mean(self.episode_rewards[-50:]),
-                "final_best_reward": np.max(self.episode_rewards),
-                "total_episodes": len(self.episode_rewards),
-                "final_reward_std": np.std(self.episode_rewards[-50:]) if len(self.episode_rewards) > 50 else 0,
-                "training_completed": True
+                "final/avg_reward": np.mean(self.episode_rewards[-50:]),
+                "final/best_reward": np.max(self.episode_rewards),
+                "final/total_episodes": len(self.episode_rewards),
+                "final/reward_std": np.std(self.episode_rewards[-50:]) if len(self.episode_rewards) > 50 else 0,
+                "final/training_completed": True
             }
             wandb.log(final_metrics)
 
