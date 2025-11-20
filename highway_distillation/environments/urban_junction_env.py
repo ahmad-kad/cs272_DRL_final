@@ -318,15 +318,15 @@ class UrbanJunctionEnv(AbstractEnv):
             "vehicles_count": 8,
             "max_episode_steps": 2500,  # Very long episodes
             "terminate_on_collision": False,  # Don't terminate on crashes
-            "collision_penalty": -50,  # Heavy penalty but don't terminate
-            "speed_reward_weight": 1.5,  # Balanced speed reward
-            "progress_reward_weight": 0.005,  # Scaled progress reward
-            "safety_reward_weight": 0.8,  # Safety margin reward
-            "lane_reward": 0.5,  # Base lane keeping reward
-            "lane_reward_weight": 0.6,  # Lane keeping reward multiplier
-            "completion_bonus": 100,  # Large completion bonus
-            "offroad_penalty": -10,  # Heavy off-road penalty
-            "traffic_flow_reward": 0.3,  # Smooth traffic flow
+            "collision_penalty": -20,  # Reduced penalty for better learning
+            "speed_reward_weight": 3.0,  # Increased for faster learning
+            "progress_reward_weight": 0.015,  # Increased for more feedback
+            "safety_reward_weight": 1.6,  # Increased safety emphasis
+            "lane_reward": 1.0,  # Increased base reward
+            "lane_reward_weight": 1.2,  # Increased multiplier
+            "completion_bonus": 50,  # Reduced but still significant
+            "offroad_penalty": -3,  # Reduced penalty
+            "traffic_flow_reward": 0.3,  # Maintained
             "stage": 1,
             "adaptive_curriculum": True,  # Enable adaptive curriculum
             "procedural_generation": True,  # Enable procedural scenarios
@@ -394,50 +394,99 @@ class UrbanJunctionEnv(AbstractEnv):
 
     def _reward(self, action: Action) -> float:
         """
-        Advanced reward system prioritizing safety and completion over collision termination.
-        Dense, multi-component rewards for sophisticated driving behavior.
+        Improved dense reward system for better learning.
+        - Increased intermediate rewards
+        - Better shaping for desired behaviors
+        - More frequent positive feedback
         """
         reward = 0.0
+        time_alive = getattr(self, 'episode_step', 0) + 1
 
-        # COLLISION PENALTY (but don't terminate episode)
+        # COLLISION PENALTY (reduced but still significant)
         if self.vehicle.crashed:
-            reward += self.config["collision_penalty"]
+            reward += self.config["collision_penalty"] * 0.5  # Less severe
             # Continue with other penalties but don't return early
 
-        # OFF-ROAD PENALTY
+        # OFF-ROAD PENALTY (reduced frequency impact)
         if not self.vehicle.on_road:
-            reward += self.config["offroad_penalty"]
+            reward += self.config["offroad_penalty"] * 0.3  # Less severe
 
-        # SPEED OPTIMIZATION (scenario-aware)
+        # SPEED OPTIMIZATION (increased weight for better learning)
         target_speed = self._get_target_speed()
         speed_error = abs(self.vehicle.speed - target_speed)
-        speed_reward = self.config["speed_reward_weight"] * max(0, 1 - speed_error / target_speed)
+        speed_ratio = min(1.0, self.vehicle.speed / max(1.0, target_speed))
+        speed_reward = self.config["speed_reward_weight"] * 2.0 * speed_ratio  # Doubled and simplified
         reward += speed_reward
 
-        # PROGRESS REWARD (continuous distance advancement)
+        # PROGRESS REWARD (increased for more frequent feedback)
         if self.initial_position is not None:
             progress = max(0, self.vehicle.position[0] - self.initial_position)
-            progress_reward = progress * self.config["progress_reward_weight"]
+            progress_reward = progress * self.config["progress_reward_weight"] * 3.0  # Tripled
             reward += progress_reward
 
-        # SAFETY MARGIN REWARD (prioritize safe distances)
-        reward += self.config["safety_reward_weight"] * self._safety_margin_reward()
+        # SAFETY MARGIN REWARD (increased weight)
+        safety_reward = self._safety_margin_reward()
+        reward += self.config["safety_reward_weight"] * 2.0 * safety_reward  # Doubled
 
-        # LANE KEEPING REWARD (scenario-adaptive)
-        reward += self.config["lane_reward_weight"] * self._lane_keeping_reward()
+        # LANE KEEPING REWARD (increased for highway scenarios)
+        lane_reward = self._lane_keeping_reward()
+        reward += self.config["lane_reward_weight"] * 2.0 * lane_reward  # Doubled
 
-        # TRAFFIC FLOW REWARD (smooth, cooperative driving)
+        # TRAFFIC FLOW REWARD (maintained)
         reward += self.config["traffic_flow_reward"] * self._traffic_flow_reward()
 
-        # COMFORT REWARD (smooth acceleration/deceleration)
-        reward += 0.2 * self._comfort_reward()
+        # COMFORT REWARD (reduced weight)
+        reward += 0.1 * self._comfort_reward()  # Reduced
 
-        # EFFICIENCY REWARD (optimal path following)
-        reward += 0.4 * self._efficiency_reward()
+        # EFFICIENCY REWARD (reduced weight)
+        reward += 0.2 * self._efficiency_reward()  # Reduced
 
-        # SCENARIO COMPLETION BONUS (major achievement)
+        # SURVIVAL BONUS (dense reward for staying alive)
+        survival_bonus = min(0.5, time_alive / 100.0)  # Up to 0.5 for first 100 steps
+        reward += survival_bonus
+
+        # EXPLORATION BONUS (encourage trying different lanes/behaviors)
+        if hasattr(self, 'previous_lane'):
+            current_lane = 0
+            if hasattr(self.vehicle, 'lane_index') and self.vehicle.lane_index and len(self.vehicle.lane_index) > 2:
+                current_lane = self.vehicle.lane_index[2]
+            if current_lane != self.previous_lane:
+                reward += 0.2  # Small bonus for lane changes (exploration)
+        else:
+            self.previous_lane = 0
+
+        # SPEED VARIETY BONUS (encourage different speed behaviors)
+        if hasattr(self, 'speed_history'):
+            self.speed_history.append(self.vehicle.speed)
+            if len(self.speed_history) > 10:
+                self.speed_history = self.speed_history[-10:]
+                speed_std = np.std(self.speed_history)
+                if speed_std > 2.0:  # Encourage speed variation
+                    reward += 0.1
+        else:
+            self.speed_history = []
+
+        # SCENARIO PROGRESS BONUS (partial completion rewards)
+        if hasattr(self, 'current_scenario'):
+            if self.current_scenario == 'highway':
+                # Highway progress bonus every 200 units
+                progress_thresholds = [200, 400, 600, 800, 1000]
+            elif self.current_scenario == 'merge':
+                progress_thresholds = [150, 300, 450]
+            else:  # intersection
+                progress_thresholds = [100, 200, 300]
+
+            if self.initial_position is not None:
+                current_progress = self.vehicle.position[0] - self.initial_position
+                for threshold in progress_thresholds:
+                    if (current_progress >= threshold and
+                        not getattr(self, f'progress_{threshold}_awarded', False)):
+                        reward += 5.0  # Partial progress bonus
+                        setattr(self, f'progress_{threshold}_awarded', True)
+
+        # SCENARIO COMPLETION BONUS (kept but reduced)
         if self._scenario_completed() and not getattr(self, 'completion_awarded', False):
-            reward += self.config["completion_bonus"]
+            reward += self.config["completion_bonus"] * 0.5  # Reduced from 100 to 50
             self.completion_awarded = True
 
         return reward

@@ -17,34 +17,51 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import gymnasium as gym
 import highway_env
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, SubprocVecEnv
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback, CallbackList
 from stable_baselines3.common.evaluation import evaluate_policy
 
 import wandb
 
 # Training configurations for different modes
+VERY_QUICK_CONFIG = {
+    'timesteps': 10000,  # Very fast iteration
+    'num_envs': 1,       # Single env for max speed
+    'n_steps': 512,      # Small steps for very quick training
+    'batch_size': 256,   # Larger batch size for better gradients
+    'learning_rate': 3e-4,
+    'checkpoint_freq': 5000,
+}
+
 QUICK_CONFIG = {
-    'timesteps': 50000,
-    'num_envs': 8,
-    'n_steps': 1024,
-    'batch_size': 128,
-    'learning_rate': 5e-4,
-    'checkpoint_freq': 10000,
+    'timesteps': 30000,  # Faster iteration
+    'num_envs': 2,       # Fewer envs for speed
+    'n_steps': 1024,     # Smaller steps for quick training
+    'batch_size': 256,   # Larger batch size for better gradients
+    'learning_rate': 3e-4,
+    'checkpoint_freq': 15000,  # Less frequent saves
 }
 
 STANDARD_CONFIG = {
-    'timesteps': 150000,
-    'num_envs': 4,
-    'n_steps': 2048,
-    'batch_size': 64,
-    'learning_rate': 3e-4,
-    'checkpoint_freq': 25000,
+    'timesteps': 200000,     # Increased for better convergence
+    'num_envs': 6,           # More parallel envs for faster training
+    'n_steps': 1024,         # Smaller steps for more frequent updates
+    'batch_size': 512,       # Larger batch size for stable gradients
+    'learning_rate': 5e-4,   # Higher learning rate for faster learning
+    'gamma': 0.99,           # Discount factor
+    'gae_lambda': 0.95,      # GAE lambda
+    'clip_range': 0.2,       # PPO clip range
+    'ent_coef': 0.01,        # Small entropy bonus for exploration
+    'vf_coef': 0.5,          # Value function coefficient
+    'max_grad_norm': 0.5,    # Gradient clipping
+    'checkpoint_freq': 25000,  # More frequent checkpoints
 }
 
 FULL_CONFIG = {
@@ -55,6 +72,87 @@ FULL_CONFIG = {
     'learning_rate': 3e-4,
     'checkpoint_freq': 50000,
 }
+
+# Production config for vanilla environments
+PRODUCTION_CONFIG = {
+    'timesteps': 500000,     # Long training for production quality
+    'num_envs': 4,           # Stable parallel environments
+    'n_steps': 2048,         # Standard PPO rollout length
+    'batch_size': 512,       # Balanced batch size
+    'learning_rate': 3e-4,   # Conservative learning rate for stability
+    'gamma': 0.99,           # Standard discount factor
+    'gae_lambda': 0.95,      # Standard GAE lambda
+    'clip_range': 0.2,       # Standard PPO clip range
+    'ent_coef': 0.01,        # Small entropy bonus
+    'vf_coef': 0.5,          # Standard value function weight
+    'max_grad_norm': 0.5,    # Standard gradient clipping
+    'checkpoint_freq': 50000,  # Regular checkpoints
+}
+
+# Curriculum stages for progressive difficulty
+BASELINE_CURRICULUM = [
+    {  # Stage 1: Basic highway (first 50k steps)
+        'duration': 50000,
+        'env_config': {
+            'vehicles_count': 4,
+            'collision_penalty': -10,
+            'offroad_penalty': -2,
+            'speed_reward_weight': 2.0,
+        }
+    },
+    {  # Stage 2: Moderate traffic (next 50k steps)
+        'duration': 50000,
+        'env_config': {
+            'vehicles_count': 6,
+            'collision_penalty': -15,
+            'offroad_penalty': -3,
+            'speed_reward_weight': 2.5,
+        }
+    },
+    {  # Stage 3: Full difficulty (final 50k steps)
+        'duration': 50000,
+        'env_config': {
+            'vehicles_count': 8,
+            'collision_penalty': -20,
+            'offroad_penalty': -5,
+            'speed_reward_weight': 3.0,
+        }
+    },
+]
+
+
+class CurriculumCallback(BaseCallback):
+    """Progressive curriculum callback for baseline training."""
+
+    def __init__(self, curriculum_stages, verbose=0):
+        super().__init__(verbose)
+        self.curriculum_stages = curriculum_stages
+        self.current_stage = 0
+        self.stage_timesteps = 0
+        self.total_timesteps = 0
+
+    def _on_step(self):
+        self.total_timesteps += 1
+        self.stage_timesteps += 1
+
+        # Check if we should advance to next stage
+        if (self.current_stage < len(self.curriculum_stages) - 1 and
+            self.stage_timesteps >= self.curriculum_stages[self.current_stage]['duration']):
+
+            self.current_stage += 1
+            self.stage_timesteps = 0
+
+            # Apply curriculum changes to environment
+            stage_config = self.curriculum_stages[self.current_stage]
+            if hasattr(self.training_env, 'envs'):
+                for env in self.training_env.envs:
+                    if hasattr(env, 'config'):
+                        env.config.update(stage_config.get('env_config', {}))
+
+            if self.verbose > 0:
+                print(f"🎯 Advanced to curriculum stage {self.current_stage + 1}")
+
+        return True
 
 
 class WandBCallback(BaseCallback):
@@ -70,6 +168,13 @@ class WandBCallback(BaseCallback):
         self.num_envs = None  # Will be set on first step
         self.episodes_completed_this_interval = 0
 
+        # Behavioral metrics for highway evaluation
+        self.collision_count = []
+        self.episode_speeds = []
+        self.lane_changes = []
+        self.off_road_time = []
+        self.success_episodes = []
+
     def _on_step(self) -> bool:
         # Get environment data
         dones = self.locals.get('dones', np.array([]))
@@ -84,6 +189,14 @@ class WandBCallback(BaseCallback):
                 setattr(self, f'current_length_{env_idx}', 0)
                 setattr(self, f'env_episode_rewards_{env_idx}', [])
 
+                # Initialize behavioral metrics per environment
+                setattr(self, f'current_collisions_{env_idx}', 0)
+                setattr(self, f'current_speeds_{env_idx}', [])
+                setattr(self, f'current_lane_changes_{env_idx}', 0)
+                setattr(self, f'current_off_road_{env_idx}', 0)
+                setattr(self, f'prev_lane_changes_{env_idx}', 0)
+                setattr(self, f'env_behavioral_stats_{env_idx}', [])
+
         # Track episodes for each environment
         for env_idx in range(self.num_envs):
             if env_idx >= len(rewards):
@@ -95,6 +208,40 @@ class WandBCallback(BaseCallback):
 
             current_reward += rewards[env_idx]
             current_length += 1
+
+            # Accumulate behavioral metrics from environment info
+            infos = self.locals.get('infos', [])
+            if env_idx < len(infos) and infos[env_idx]:
+                env_info = infos[env_idx]
+
+                # Extract behavioral data (highway-env specific)
+                crashed = env_info.get('crashed', False)
+                speed = env_info.get('speed', 0)
+                lane_changes = env_info.get('lane_changes', 0)
+                off_road = env_info.get('off_road', False)
+
+                # Update current episode behavioral metrics
+                current_collisions = getattr(self, f'current_collisions_{env_idx}')
+                current_speeds = getattr(self, f'current_speeds_{env_idx}')
+                current_lane_changes = getattr(self, f'current_lane_changes_{env_idx}')
+                current_off_road = getattr(self, f'current_off_road_{env_idx}')
+
+                if crashed:
+                    current_collisions += 1
+                current_speeds.append(speed)
+                if lane_changes > getattr(self, f'prev_lane_changes_{env_idx}', 0):
+                    current_lane_changes += 1
+                if off_road:
+                    current_off_road += 1
+
+                # Store current lane changes for next step comparison
+                setattr(self, f'prev_lane_changes_{env_idx}', lane_changes)
+
+                # Update behavioral tracking
+                setattr(self, f'current_collisions_{env_idx}', current_collisions)
+                setattr(self, f'current_speeds_{env_idx}', current_speeds)
+                setattr(self, f'current_lane_changes_{env_idx}', current_lane_changes)
+                setattr(self, f'current_off_road_{env_idx}', current_off_road)
 
             setattr(self, f'current_reward_{env_idx}', current_reward)
             setattr(self, f'current_length_{env_idx}', current_length)
@@ -108,12 +255,53 @@ class WandBCallback(BaseCallback):
                 self.episode_lengths.append(current_length)
                 self.episodes_completed_this_interval += 1
 
+                # Collect behavioral metrics for this episode
+                current_collisions = getattr(self, f'current_collisions_{env_idx}')
+                current_speeds = getattr(self, f'current_speeds_{env_idx}')
+                current_lane_changes = getattr(self, f'current_lane_changes_{env_idx}')
+                current_off_road = getattr(self, f'current_off_road_{env_idx}')
+
+                # Calculate behavioral statistics
+                avg_speed = np.mean(current_speeds) if current_speeds else 0
+                collision_rate = current_collisions / max(1, current_length)
+                off_road_rate = current_off_road / max(1, current_length)
+                episode_success = 1 if (current_reward > 20 and collision_rate < 0.1) else 0
+
+                # Store behavioral stats
+                behavioral_stats = {
+                    'collisions': current_collisions,
+                    'avg_speed': avg_speed,
+                    'lane_changes': current_lane_changes,
+                    'off_road_time': current_off_road,
+                    'collision_rate': collision_rate,
+                    'off_road_rate': off_road_rate,
+                    'success': episode_success
+                }
+
+                # Add to global behavioral tracking
+                self.collision_count.append(current_collisions)
+                self.episode_speeds.append(avg_speed)
+                self.lane_changes.append(current_lane_changes)
+                self.off_road_time.append(current_off_road)
+                self.success_episodes.append(episode_success)
+
+                # Store per-environment behavioral stats
+                env_behavioral_stats = getattr(self, f'env_behavioral_stats_{env_idx}')
+                env_behavioral_stats.append(behavioral_stats)
+
                 # Log episode immediately when it completes
                 episode_metrics = {
                     "episode_reward": current_reward,
                     "episode_length": current_length,
                     "episode_env_id": env_idx,
                     "episode_total_count": len(self.episode_rewards),
+                    # Enhanced behavioral metrics
+                    "episode_collisions": current_collisions,
+                    "episode_avg_speed": avg_speed,
+                    "episode_lane_changes": current_lane_changes,
+                    "episode_off_road_time": current_off_road,
+                    "episode_collision_rate": collision_rate,
+                    "episode_success": episode_success,
                 }
 
                 # Add running statistics if we have enough episodes
@@ -138,6 +326,13 @@ class WandBCallback(BaseCallback):
                 # Reset for next episode in this environment
                 setattr(self, f'current_reward_{env_idx}', 0.0)
                 setattr(self, f'current_length_{env_idx}', 0)
+
+                # Reset behavioral metrics for next episode
+                setattr(self, f'current_collisions_{env_idx}', 0)
+                setattr(self, f'current_speeds_{env_idx}', [])
+                setattr(self, f'current_lane_changes_{env_idx}', 0)
+                setattr(self, f'current_off_road_{env_idx}', 0)
+                setattr(self, f'prev_lane_changes_{env_idx}', 0)
 
         # Log at regular intervals (more frequent for multi-env)
         # Use adaptive frequency: more frequent early in training
@@ -199,6 +394,29 @@ class WandBCallback(BaseCallback):
                     positive_episodes = sum(1 for r in recent_rewards if r > 0)
                     metrics["episode_success_rate"] = positive_episodes / len(recent_rewards)
 
+                # === HIGHWAY BEHAVIORAL METRICS ===
+                if len(self.collision_count) >= 5:
+                    recent_collisions = self.collision_count[-20:]
+                    recent_speeds = self.episode_speeds[-20:]
+                    recent_lane_changes = self.lane_changes[-20:]
+                    recent_off_road = self.off_road_time[-20:]
+                    recent_success = self.success_episodes[-20:]
+
+                    metrics.update({
+                        # Safety metrics
+                        "highway_collision_rate": np.mean(recent_collisions),
+                        "highway_avg_speed": np.mean(recent_speeds),
+                        "highway_speed_std": np.std(recent_speeds) if len(recent_speeds) > 1 else 0,
+
+                        # Maneuvering metrics
+                        "highway_lane_changes_per_episode": np.mean(recent_lane_changes),
+                        "highway_off_road_rate": np.mean(recent_off_road) / np.mean(recent_lengths[-20:]) if recent_lengths else 0,
+
+                        # Performance metrics
+                        "highway_success_rate": np.mean(recent_success),
+                        "highway_performance_score": (np.mean(recent_rewards) / max(1, np.mean(recent_lengths))) * (1 - np.mean(recent_collisions)),
+                    })
+
             # Reset interval counter
             self.episodes_completed_this_interval = 0
 
@@ -220,6 +438,11 @@ class WandBCallback(BaseCallback):
                 "final_total_episodes": len(self.episode_rewards),
                 "final_reward_std": final_std,
                 "training_completed": 1,  # Numeric for plotting
+                # Final behavioral metrics
+                "final_collision_rate": np.mean(self.collision_count[-50:]) if self.collision_count else 0,
+                "final_avg_speed": np.mean(self.episode_speeds[-50:]) if self.episode_speeds else 0,
+                "final_success_rate": np.mean(self.success_episodes[-50:]) if self.success_episodes else 0,
+                "final_lane_changes_avg": np.mean(self.lane_changes[-50:]) if self.lane_changes else 0,
             }
             wandb.log(final_metrics)
             
@@ -230,7 +453,13 @@ class WandBCallback(BaseCallback):
                 "total_episodes": len(self.episode_rewards),
                 "env_name": self.env_name,
                 "obs_type": self.obs_type,
-                "training_completed": True
+                "training_completed": True,
+                # Behavioral summary
+                "final_collision_rate": float(np.mean(self.collision_count[-50:]) if self.collision_count else 0),
+                "final_avg_speed": float(np.mean(self.episode_speeds[-50:]) if self.episode_speeds else 0),
+                "final_success_rate": float(np.mean(self.success_episodes[-50:]) if self.success_episodes else 0),
+                "highway_performance_score": float((final_avg / max(1, np.mean(self.episode_lengths[-50:]))) *
+                                                 (1 - (np.mean(self.collision_count[-50:]) if self.collision_count else 0)))
             })
         else:
             # Even if no episodes, log that training completed
@@ -404,6 +633,23 @@ def create_multi_env(
     return vec_env, env_names * num_envs_per_type
 
 
+def train_single_baseline_parallel(task):
+    """Parallel version of train_single_baseline for multiprocessing."""
+    env_name = task['env_name']
+    obs_type = task['obs_type']
+    config = task['config']
+    device = task['device']
+
+    # Set multiprocessing start method for CUDA compatibility
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
+
+    # Run the training
+    return train_single_baseline(env_name, obs_type, config, device)
+
+
 def train_single_baseline(
     env_name: str,
     obs_type: str,
@@ -477,10 +723,13 @@ def train_single_baseline(
     # Determine policy type
     if obs_type == "GrayscaleObservation":
         policy_type = "CnnPolicy"
-        policy_kwargs = {}
+        policy_kwargs = {
+            "net_arch": [64, 64],
+            "normalize_images": False  # highway-env grayscale doesn't need normalization
+        }
     else:
         policy_type = "MlpPolicy"
-        policy_kwargs = {"net_arch": [256, 256]}
+        policy_kwargs = {"net_arch": [512, 256, 128]}  # Deeper network for sensor processing
 
     # Create model
     model = PPO(
@@ -488,16 +737,16 @@ def train_single_baseline(
         train_env,
         policy_kwargs=policy_kwargs,
         learning_rate=config['learning_rate'],
-        n_steps=config['n_steps'],
+        n_steps=config.get('n_steps', 2048),  # Experience replay buffer
         batch_size=config['batch_size'],
-        n_epochs=10,
+        n_epochs=10,  # Start learning after collecting experiences
         gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,
-        vf_coef=0.5,
+        gae_lambda=0.95,  # Soft update coefficient
+        clip_range=0.2,  # Update per episode for stability
+        ent_coef=0.01,  # Auto-tune entropy coefficient
+        vf_coef=0.5,  # Target entropy for exploration
         max_grad_norm=0.5,
-        verbose=1,
+        verbose=0,
         device=device,
         tensorboard_log=str(log_dir)
     )
@@ -509,8 +758,11 @@ def train_single_baseline(
         name_prefix=f"baseline_{env_clean}_{obs_clean}"
     )
 
-    # Enhanced WandB logging
-    wandb_callback = WandBCallback(env_name, obs_type, log_freq=100, verbose=1)  # More frequent logging
+    # Curriculum callback for progressive difficulty
+    curriculum_callback = CurriculumCallback(BASELINE_CURRICULUM, verbose=1)
+
+    # Optimized WandB logging for speed
+    wandb_callback = WandBCallback(env_name, obs_type, log_freq=500, verbose=0)  # Less frequent, quiet
 
     # Track training start time
     training_start_time = time.time()
@@ -520,7 +772,7 @@ def train_single_baseline(
 
     model.learn(
         total_timesteps=config['timesteps'],
-        callback=[checkpoint_callback, wandb_callback]
+        callback=[checkpoint_callback, wandb_callback, curriculum_callback]
     )
 
     training_duration = time.time() - training_start_time
@@ -652,10 +904,13 @@ def train_multi_env_baseline(
     # Determine policy type
     if obs_type == "GrayscaleObservation":
         policy_type = "CnnPolicy"
-        policy_kwargs = {}
+        policy_kwargs = {
+            "net_arch": [64, 64],
+            "normalize_images": False  # highway-env grayscale doesn't need normalization
+        }
     else:
         policy_type = "MlpPolicy"
-        policy_kwargs = {"net_arch": [256, 256]}
+        policy_kwargs = {"net_arch": [512, 256, 128]}  # Deeper network for sensor processing
 
     # Create model
     model = PPO(
@@ -663,16 +918,16 @@ def train_multi_env_baseline(
         train_env,
         policy_kwargs=policy_kwargs,
         learning_rate=config['learning_rate'],
-        n_steps=config['n_steps'],
+        n_steps=config.get('n_steps', 2048),  # Experience replay buffer
         batch_size=config['batch_size'],
-        n_epochs=10,
+        n_epochs=10,  # Start learning after collecting experiences
         gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,
-        vf_coef=0.5,
+        gae_lambda=0.95,  # Soft update coefficient
+        clip_range=0.2,  # Update per episode for stability
+        ent_coef=0.01,  # Auto-tune entropy coefficient
+        vf_coef=0.5,  # Target entropy for exploration
         max_grad_norm=0.5,
-        verbose=1,
+        verbose=0,
         device=device,
         tensorboard_log=str(log_dir)
     )
@@ -685,7 +940,7 @@ def train_multi_env_baseline(
         name_prefix=f"multi_generalist_{obs_clean}"
     )
 
-    multi_env_callback = WandBCallback("multi_env", obs_type, verbose=1)
+    multi_env_callback = WandBCallback("multi_env", obs_type, verbose=0)
 
     # Train
     training_start_time = time.time()
@@ -760,7 +1015,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Quick test all combinations
+  # Very quick test (10k steps, ~2-3 minutes)
+  python train_all_baselines.py --mode very_quick --env highway-v0 --obs Lidar
+
+  # Quick test all combinations (30k steps)
   python train_all_baselines.py --mode quick --all
 
   # Train specific environment
@@ -777,9 +1035,9 @@ Examples:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["quick", "standard", "full", "multi"],
+        choices=["very_quick", "quick", "standard", "full", "multi"],
         default="standard",
-        help="Training mode: quick (50k), standard (150k), full (300k), multi (generalist)"
+        help="Training mode: very_quick (10k), quick (30k), standard (150k), full (300k), multi (generalist)"
     )
 
     parser.add_argument(
@@ -819,14 +1077,16 @@ Examples:
     args = parser.parse_args()
 
     # Select configuration
-    if args.mode == "quick":
+    if args.mode == "very_quick":
+        config = VERY_QUICK_CONFIG
+    elif args.mode == "quick":
         config = QUICK_CONFIG
     elif args.mode == "standard":
-        config = STANDARD_CONFIG
+        config = PRODUCTION_CONFIG  # Use production config for vanilla environments
     elif args.mode == "full":
         config = FULL_CONFIG
     elif args.mode == "multi":
-        config = STANDARD_CONFIG  # Use standard for multi-env
+        config = PRODUCTION_CONFIG  # Use production config for multi-env
 
     print("="*70)
     print("BASELINE TRAINING SYSTEM")
@@ -871,20 +1131,24 @@ Examples:
             print("ERROR: Must specify --env, --obs, --all, or --mode multi")
             sys.exit(1)
 
-        # Train all combinations
+        # Train all combinations sequentially (fast for baseline establishment)
         total_combinations = len(environments) * len(observations)
-        current = 0
+        print(f"\n[SEQUENTIAL] Training {total_combinations} agents sequentially...")
+        print("Each agent gets its own WandB run with clear environment + modality labels")
 
+        current = 0
         for env_name in environments:
             for obs_type in observations:
                 current += 1
-                print(f"\n[{current}/{total_combinations}] Training {env_name} + {obs_type}")
+                print(f"\n[{current}/{total_combinations}] STARTING: {env_name} + {obs_type}")
+                print(f"WandB run name will be: baseline_{env_name}_{obs_type.lower()}_[timestamp]")
 
                 try:
                     result = train_single_baseline(env_name, obs_type, config, args.device)
                     results.append(result)
+                    print(f"[SUCCESS] Completed: {env_name} + {obs_type}")
                 except Exception as e:
-                    print(f"Failed to train {env_name} + {obs_type}: {e}")
+                    print(f"[FAILED] {env_name} + {obs_type} - {e}")
                     import traceback
                     traceback.print_exc()
 
