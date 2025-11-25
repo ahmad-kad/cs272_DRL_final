@@ -371,27 +371,23 @@ class UrbanJunctionEnv(AbstractEnv):
         obs, info = super().reset(**kwargs)
 
         if self.modality == "both":
-            # Generate both types of observations and combine them
-            # Temporarily change observation config to get grayscale
-            original_config = self.config["observation"]
-            self.config["observation"] = self.obs_configs["grayscale"]
-
-            # Get grayscale observation (this is hacky but works)
-            # We need to trigger the observation generation again
-            grayscale_obs = self.observation_space.sample()  # Placeholder - need better way
-            # Actually, let's use the fact that we can call the observation method again
+            # Generate grayscale observation
             try:
-                # This is a bit of a hack - we temporarily change the observation type
-                # and call the parent's observation method
                 from highway_env.envs.common.observation import GrayscaleObservation
-                grayscale_observer = GrayscaleObservation(self, self.obs_configs["grayscale"])
+                grayscale_observer = GrayscaleObservation(
+                    self,
+                    observation_shape=self.obs_configs["grayscale"]["observation_shape"],
+                    stack_size=self.obs_configs["grayscale"]["stack_size"],
+                    weights=self.obs_configs["grayscale"]["weights"],
+                    scaling=self.obs_configs["grayscale"]["scaling"]
+                )
                 grayscale_obs = grayscale_observer.observe()
-            except:
-                # Fallback: just use the lidar observation if grayscale fails
-                grayscale_obs = obs
-
-            self.config["observation"] = original_config
-            obs = self._combine_observations(obs, grayscale_obs)
+                obs = self._combine_observations(obs, grayscale_obs)
+            except Exception as e:
+                print(f"Warning: Could not generate grayscale observation: {e}")
+                # Fallback: create a dummy grayscale observation with correct shape
+                dummy_grayscale = np.zeros((4, 128, 64), dtype=np.uint8)
+                obs = self._combine_observations(obs, dummy_grayscale)
 
         return obs, info
 
@@ -409,12 +405,20 @@ class UrbanJunctionEnv(AbstractEnv):
             # Generate grayscale observation and combine
             try:
                 from highway_env.envs.common.observation import GrayscaleObservation
-                grayscale_observer = GrayscaleObservation(self, self.obs_configs["grayscale"])
+                grayscale_observer = GrayscaleObservation(
+                    self,
+                    observation_shape=self.obs_configs["grayscale"]["observation_shape"],
+                    stack_size=self.obs_configs["grayscale"]["stack_size"],
+                    weights=self.obs_configs["grayscale"]["weights"],
+                    scaling=self.obs_configs["grayscale"]["scaling"]
+                )
                 grayscale_obs = grayscale_observer.observe()
                 obs = self._combine_observations(obs, grayscale_obs)
-            except:
-                # Keep original observation if grayscale generation fails
-                pass
+            except Exception as e:
+                print(f"Warning: Could not generate grayscale observation in step: {e}")
+                # Fallback: create a dummy grayscale observation
+                dummy_grayscale = np.zeros((4, 128, 64), dtype=np.uint8)
+                obs = self._combine_observations(obs, dummy_grayscale)
 
         if len(step_result) == 5:
             return obs, reward, terminated, truncated, info
