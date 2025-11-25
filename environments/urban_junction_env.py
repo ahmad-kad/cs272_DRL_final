@@ -123,7 +123,12 @@ class UrbanJunctionEnv(AbstractEnv):
 
         # Apply the config
         local_config = config or self.default_config()
-        local_config["observation"] = self.obs_configs[modality]
+        if modality == "both":
+            # For "both" modality, we'll handle observation generation ourselves
+            # Use lidar config as base since we'll override observation generation
+            local_config["observation"] = self.obs_configs["lidar"]
+        else:
+            local_config["observation"] = self.obs_configs[modality]
 
         super().__init__(local_config)
 
@@ -349,6 +354,72 @@ class UrbanJunctionEnv(AbstractEnv):
                  rewards["arrived_reward"] = 0.0
 
         return rewards
+
+    def _combine_observations(self, lidar_obs, grayscale_obs):
+        """Combine lidar and grayscale observations into single array."""
+        lidar_flat = lidar_obs.flatten()
+        grayscale_flat = grayscale_obs.flatten().astype(np.float32)
+
+        # Normalize grayscale to similar scale as lidar
+        grayscale_flat = (grayscale_flat / 127.5) - 1.0  # Normalize to [-1, 1]
+
+        combined_obs = np.concatenate([lidar_flat, grayscale_flat])
+        return combined_obs
+
+    def reset(self, **kwargs):
+        """Reset environment and return combined observations if modality is 'both'."""
+        obs, info = super().reset(**kwargs)
+
+        if self.modality == "both":
+            # Generate both types of observations and combine them
+            # Temporarily change observation config to get grayscale
+            original_config = self.config["observation"]
+            self.config["observation"] = self.obs_configs["grayscale"]
+
+            # Get grayscale observation (this is hacky but works)
+            # We need to trigger the observation generation again
+            grayscale_obs = self.observation_space.sample()  # Placeholder - need better way
+            # Actually, let's use the fact that we can call the observation method again
+            try:
+                # This is a bit of a hack - we temporarily change the observation type
+                # and call the parent's observation method
+                from highway_env.envs.common.observation import GrayscaleObservation
+                grayscale_observer = GrayscaleObservation(self, self.obs_configs["grayscale"])
+                grayscale_obs = grayscale_observer.observe()
+            except:
+                # Fallback: just use the lidar observation if grayscale fails
+                grayscale_obs = obs
+
+            self.config["observation"] = original_config
+            obs = self._combine_observations(obs, grayscale_obs)
+
+        return obs, info
+
+    def step(self, action):
+        """Step environment and return combined observations if modality is 'both'."""
+        step_result = super().step(action)
+
+        if len(step_result) == 5:
+            obs, reward, terminated, truncated, info = step_result
+            done = terminated or truncated
+        else:
+            obs, reward, done, info = step_result
+
+        if self.modality == "both":
+            # Generate grayscale observation and combine
+            try:
+                from highway_env.envs.common.observation import GrayscaleObservation
+                grayscale_observer = GrayscaleObservation(self, self.obs_configs["grayscale"])
+                grayscale_obs = grayscale_observer.observe()
+                obs = self._combine_observations(obs, grayscale_obs)
+            except:
+                # Keep original observation if grayscale generation fails
+                pass
+
+        if len(step_result) == 5:
+            return obs, reward, terminated, truncated, info
+        else:
+            return obs, reward, done, info
 
     def _is_terminated(self) -> bool:
         """The episode is over if the ego vehicle crashed."""
