@@ -79,7 +79,8 @@ class UrbanJunctionEnv(AbstractEnv):
         self,
         config: Optional[Dict[str, Any]] = None,
         scenario: str = "highway",
-        modality: str = "both"
+        modality: str = "both",
+        render_mode: Optional[str] = None
     ) -> None:
         """
         Initialize the Urban Junction Environment.
@@ -89,6 +90,7 @@ class UrbanJunctionEnv(AbstractEnv):
             scenario: Driving scenario. Must be one of:
                      "highway", "merge", "intersection", or "random"
             modality: Observation modality. Must be "lidar", "grayscale", or "both"
+            render_mode: Rendering mode ("human", "rgb_array", or None)
 
         Raises:
             ValueError: If scenario or modality are invalid
@@ -102,6 +104,7 @@ class UrbanJunctionEnv(AbstractEnv):
         self.modality = modality
         self.scenario_input = scenario
         self.current_scenario = scenario
+        self.render_mode = render_mode
 
         # Standardize Observation Configs
         self.obs_configs = {
@@ -130,7 +133,16 @@ class UrbanJunctionEnv(AbstractEnv):
         else:
             local_config["observation"] = self.obs_configs[modality]
 
-        super().__init__(local_config)
+        super().__init__(config=local_config, render_mode=render_mode)
+
+        # Set spec for rendering compatibility (highway-env needs this)
+        if not hasattr(self, 'spec') or self.spec is None:
+            from gymnasium.envs.registration import EnvSpec
+            self.spec = EnvSpec(
+                id='UrbanJunctionEnv-v0',
+                entry_point='environments.urban_junction_env:UrbanJunctionEnv',
+                max_episode_steps=self.config.get("duration", 1000),
+            )
 
         # 2. Fix Observation Space for SB3
         # We must define this explicitly because highway-env dynamic spaces confuse vector envs
@@ -424,6 +436,16 @@ class UrbanJunctionEnv(AbstractEnv):
             return obs, reward, terminated, truncated, info
         else:
             return obs, reward, done, info
+
+    def render(self):
+        """Render the environment."""
+        try:
+            return super().render()
+        except Exception as e:
+            # If rendering fails, provide helpful error message
+            print(f"Warning: Environment rendering failed: {e}")
+            print("This is normal when running without display. Use --visualize only in graphical environments.")
+            return None
 
     def _is_terminated(self) -> bool:
         """The episode is over if the ego vehicle crashed."""

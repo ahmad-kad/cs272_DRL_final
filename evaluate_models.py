@@ -62,25 +62,50 @@ def evaluate_model_on_scenario(
         print(f"  Visualization enabled (render delay: {render_delay}s)")
         print("  Close the visualization window to continue evaluation...")
 
-    # Load model
-    try:
-        model = PPO.load(model_path)
-    except Exception as e:
-        raise ValueError(f"Failed to load model from {model_path}: {e}")
-
     # Get evaluation configuration
     config = get_evaluation_config(scenario, modality)
 
-    # Create environment
-    env = UrbanJunctionEnv(
-        config=config,
-        scenario=scenario,
-        modality=modality
-    )
+    # For visualization, we need to handle environment creation differently
+    # to avoid stable-baselines3 wrapping issues
+    if visualize:
+        # Create environment directly without stable-baselines3 wrapping for visualization
+        env = UrbanJunctionEnv(
+            config=config,
+            scenario=scenario,
+            modality=modality
+        )
 
-    # Set seeds for reproducibility
-    env.reset(seed=seed)
-    model.set_random_seed(seed)
+        # Load model without environment (less strict compatibility check)
+        try:
+            model = PPO.load(model_path)
+        except Exception as e:
+            raise ValueError(f"Failed to load model from {model_path}: {e}")
+
+        # Check basic compatibility
+        if hasattr(model, 'observation_space') and hasattr(env, 'observation_space'):
+            print(f"Model obs space: {model.observation_space}")
+            print(f"Env obs space: {env.observation_space}")
+
+        # Set seeds
+        env.reset(seed=seed)
+        model.set_random_seed(seed)
+    else:
+        # Standard evaluation with proper environment wrapping
+        env = UrbanJunctionEnv(
+            config=config,
+            scenario=scenario,
+            modality=modality
+        )
+
+        # Load model with environment to ensure compatibility
+        try:
+            model = PPO.load(model_path, env=env)
+        except Exception as e:
+            raise ValueError(f"Failed to load model from {model_path}: {e}")
+
+        # Set seeds for reproducibility
+        env.reset(seed=seed)
+        model.set_random_seed(seed)
 
     # Evaluation metrics
     episode_rewards = []
@@ -220,8 +245,12 @@ def evaluate_model_comprehensive(
             all_rewards.append(scenario_results["avg_reward"])
 
         except Exception as e:
-            print(f"Error evaluating {scenario}: {e}")
-            results["scenarios"][scenario] = {"error": str(e)}
+            import traceback
+            error_msg = f"Error evaluating {scenario}: {e}"
+            print(error_msg)
+            print("Full traceback:")
+            traceback.print_exc()
+            results["scenarios"][scenario] = {"error": str(e), "traceback": traceback.format_exc()}
 
     # Calculate overall statistics
     if all_success_rates:
