@@ -28,6 +28,15 @@ def get_curriculum_config(env_name, difficulty="easy", modality="lidar"):
             "weights": [0.2989, 0.5870, 0.1140],
             "scaling": 1.75,
         }
+    elif modality == "both":
+        # For "both" modality, use lidar config as base (environment handles combination)
+        obs_config = {
+            "type": "LidarObservation",
+            "cells": 32,
+            "row_anchor": [0.5, 0.5],
+            "features": ["presence", "distance", "speed"],
+            "features_range": {"distance": [0, 50], "speed": [-30, 30]}
+        }
     else:
         raise ValueError(f"Unknown modality: {modality}")
 

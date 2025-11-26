@@ -11,17 +11,19 @@ from typing import Dict, Any, Optional
 
 from utils.config import get_curriculum_config
 from utils.callbacks import WandbMetricsCallback
-from models.attention import AttentiveLidarExtractor
+# from models.attention import AttentiveLidarExtractor  # Module not available
 
 class AdaptiveCurriculum:
     """
     Manages difficulty scaling based on agent performance for maximum generalization.
+    Includes modality progression for multi-modal learning.
     """
 
-    def __init__(self, min_difficulty=0.0, max_difficulty=1.0):
+    def __init__(self, min_difficulty=0.0, max_difficulty=1.0, enable_modality_curriculum=True):
         self.difficulty_level = min_difficulty
         self.min_difficulty = min_difficulty
         self.max_difficulty = max_difficulty
+        self.enable_modality_curriculum = enable_modality_curriculum
 
         # Performance tracking (sliding window)
         self.performance_window = deque(maxlen=50)  # Last 50 evaluations
@@ -39,6 +41,9 @@ class AdaptiveCurriculum:
         # Scenario mixing (highway/merge/intersection ratios)
         self.scenario_mix = self._get_scenario_mix(self.difficulty_level)
 
+        # Modality mixing for multi-modal curriculum
+        self.modality_mix = self._get_modality_mix(self.difficulty_level)
+
         # Curriculum progression tracking
         self.progression_history = []
 
@@ -55,6 +60,10 @@ class AdaptiveCurriculum:
             "scenario_mix": self._get_scenario_mix(d),
             "difficulty_level": d
         }
+
+        # Add modality mixing if enabled
+        if self.enable_modality_curriculum:
+            config["modality_mix"] = self._get_modality_mix(d)
 
         return config
 
@@ -75,6 +84,28 @@ class AdaptiveCurriculum:
         else:
             # Maximum generalization: Intersection dominant for mastery
             return {"highway": 0.2, "merge": 0.2, "intersection": 0.6}
+
+    def _get_modality_mix(self, difficulty: float) -> Dict[str, float]:
+        """Multi-modal curriculum: gradually introduce combined modalities."""
+        if not self.enable_modality_curriculum:
+            return {"both": 1.0}  # Default to both if curriculum disabled
+
+        if difficulty < 0.2:
+            # Foundation: Single modality focus for basic skills
+            # Alternate between lidar and grayscale to build diverse foundations
+            return {"lidar": 1.0, "grayscale": 0.0, "both": 0.0}
+        elif difficulty < 0.4:
+            # Introduction: Mix single modalities
+            return {"lidar": 0.6, "grayscale": 0.4, "both": 0.0}
+        elif difficulty < 0.6:
+            # Transition: Introduce combined modality alongside singles
+            return {"lidar": 0.3, "grayscale": 0.3, "both": 0.4}
+        elif difficulty < 0.8:
+            # Integration: Combined modality becomes primary
+            return {"lidar": 0.2, "grayscale": 0.2, "both": 0.6}
+        else:
+            # Mastery: Full multi-modal learning
+            return {"lidar": 0.1, "grayscale": 0.1, "both": 0.8}
 
     def update_difficulty(self, performance: Dict[str, float]) -> bool:
         """
@@ -159,6 +190,10 @@ class AdaptiveCurriculum:
             # Update scenario mix
             self.scenario_mix = self._get_scenario_mix(self.difficulty_level)
 
+            # Update modality mix if enabled
+            if self.enable_modality_curriculum:
+                self.modality_mix = self._get_modality_mix(self.difficulty_level)
+
         return difficulty_changed
 
     def get_progress_summary(self) -> Dict[str, Any]:
@@ -166,6 +201,7 @@ class AdaptiveCurriculum:
         return {
             "current_difficulty": self.difficulty_level,
             "scenario_mix": self.scenario_mix,
+            "modality_mix": self.modality_mix if self.enable_modality_curriculum else None,
             "progression_events": len(self.progression_history),
             "performance_trend": list(self.performance_window)[-5:] if self.performance_window else []
         }
@@ -175,11 +211,13 @@ class AdaptiveTrainer:
     Trainer that uses performance-driven curriculum learning.
     """
 
-    def __init__(self, modality="lidar", base_dir="outputs", use_attention=True, checkpoint_path=None):
-        self.modality = modality
+    def __init__(self, modality="both", base_dir="outputs", use_attention=True, checkpoint_path=None, enable_modality_curriculum=True):
+        self.base_modality = modality  # Store the base modality
+        self.current_modality = modality  # Track current modality for model compatibility
         self.base_dir = base_dir
         self.use_attention = use_attention
         self.checkpoint_path = checkpoint_path
+        self.enable_modality_curriculum = enable_modality_curriculum
 
         # Setup directories
         self.models_dir = os.path.join(base_dir, "models")
@@ -188,7 +226,7 @@ class AdaptiveTrainer:
         os.makedirs(self.logs_dir, exist_ok=True)
 
         # Initialize curriculum (model created dynamically)
-        self.curriculum = AdaptiveCurriculum()
+        self.curriculum = AdaptiveCurriculum(enable_modality_curriculum=enable_modality_curriculum)
         self.model = None
 
         # Training state
@@ -197,19 +235,22 @@ class AdaptiveTrainer:
 
     def _create_model(self, env):
         """Create PPO model with optional attention."""
-        policy = "MlpPolicy" if self.modality == "lidar" else "CnnPolicy"
+        policy = "MlpPolicy" if self.current_modality in ["lidar", "both"] else "CnnPolicy"
 
         # Base hyperparameters
-        policy_kwargs = {
-            "net_arch": [64, 64] if self.modality == "lidar" else {},
-        }
+        if self.current_modality in ["lidar", "both"]:
+            policy_kwargs = {"net_arch": [256, 128]}  # Larger network for combined observations
+        else:
+            policy_kwargs = {}  # Default CNN architecture
 
         # Add attention if requested
-        if self.use_attention and self.modality == "lidar":
-            from models.attention import AttentiveLidarExtractor
-            policy_kwargs["features_extractor_class"] = AttentiveLidarExtractor
-            policy_kwargs["features_extractor_kwargs"] = {"features_dim": 128}
-            policy_kwargs["net_arch"] = [128]  # Smaller since attention does heavy lifting
+        if self.use_attention and self.current_modality == "lidar":
+            # Attention module not available - using standard MLP
+            # from models.attention import AttentiveLidarExtractor
+            # policy_kwargs["features_extractor_class"] = AttentiveLidarExtractor
+            # policy_kwargs["features_extractor_kwargs"] = {"features_dim": 128}
+            policy_kwargs["net_arch"] = [128]  # Smaller network
+            print("Warning: Attention mechanisms disabled (module not available)")
 
         # Create model with environment
         model = PPO(
@@ -270,7 +311,8 @@ class AdaptiveTrainer:
         Continues until target_difficulty is reached or total_timesteps is exceeded.
         """
         print("Starting Adaptive Curriculum Training")
-        print(f"Modality: {self.modality}")
+        print(f"Base Modality: {self.base_modality}")
+        print(f"Modality Curriculum: {'Enabled' if self.enable_modality_curriculum else 'Disabled'}")
         print(f"Attention: {'Enabled' if self.use_attention else 'Disabled'}")
         print(f"Target Difficulty: {target_difficulty}")
         print(f"Total timesteps: {total_timesteps}")
@@ -285,8 +327,21 @@ class AdaptiveTrainer:
             # 2. Create mixed environment based on difficulty
             env = self._create_adaptive_environment(curr_config)
 
-            # 3. Create or load/update model with current environment
-            if self.model is None:
+            # 3. Check if we need a new model due to modality change
+            # Determine the primary modality from the mix
+            if "modality_mix" in curr_config:
+                primary_modality = max(curr_config["modality_mix"], key=curr_config["modality_mix"].get)
+            else:
+                primary_modality = self.base_modality
+
+            needs_new_model = (self.model is None or
+                             primary_modality != self.current_modality)
+
+            if needs_new_model:
+                self.current_modality = primary_modality
+                if self.model is not None:
+                    print(f"Modality changed to {primary_modality}, creating new model")
+
                 if self.checkpoint_path and os.path.exists(self.checkpoint_path):
                     print(f"Loading checkpoint from: {self.checkpoint_path}")
                     self.model = PPO.load(self.checkpoint_path, env=env, device="cuda" if torch.cuda.is_available() else "cpu")
@@ -295,14 +350,19 @@ class AdaptiveTrainer:
                 else:
                     self.model = self._create_model(env)
             else:
-                self.model.set_env(env)
+                try:
+                    self.model.set_env(env)
+                except ValueError:
+                    # If set_env fails (e.g., observation space mismatch), create new model
+                    print("Observation space mismatch, creating new model")
+                    self.model = self._create_model(env)
 
             # 3. Setup callbacks for this training segment
             callbacks = [WandbMetricsCallback()]
             ckpt_cb = CheckpointCallback(
                 save_freq=10000,  # Save every 10k steps
                 save_path=self.models_dir,
-                name_prefix=f"adaptive_{self.modality}_{int(self.curriculum.difficulty_level*100)}"
+                name_prefix=f"adaptive_{self.current_modality}_{int(self.curriculum.difficulty_level*100)}"
             )
             callbacks.append(ckpt_cb)
 
@@ -360,8 +420,16 @@ class AdaptiveTrainer:
             weights = list(config["scenario_mix"].values())
             scenario = np.random.choice(scenarios, p=weights)
 
+            # Select modality based on mixing weights (if curriculum enabled)
+            if "modality_mix" in config:
+                modalities = list(config["modality_mix"].keys())
+                modality_weights = list(config["modality_mix"].values())
+                sampled_modality = np.random.choice(modalities, p=modality_weights)
+            else:
+                sampled_modality = self.base_modality
+
             # Get curriculum configuration
-            env_config = get_curriculum_config(scenario, "medium", self.modality)
+            env_config = get_curriculum_config(scenario, "medium", sampled_modality)
 
             # Override with adaptive parameters
             env_config["vehicles_count"] = config["vehicle_density"]
@@ -450,10 +518,12 @@ class AdaptiveTrainer:
         print(f"   Crash Rate: {performance['crash_rate']:.2f}")
         print(f"   Avg Reward: {performance['avg_reward']:.2f}")
         print(f"   Scenario Mix: {progress['scenario_mix']}")
+        if progress.get('modality_mix'):
+            print(f"   Modality Mix: {progress['modality_mix']}")
 
         # Log to wandb if available
         if wandb.run is not None:
-            wandb.log({
+            log_data = {
                 "timesteps": timesteps,
                 "difficulty_level": progress['current_difficulty'],
                 "success_rate": performance['success_rate'],
@@ -462,41 +532,50 @@ class AdaptiveTrainer:
                 "scenario_highway": progress['scenario_mix']['highway'],
                 "scenario_merge": progress['scenario_mix']['merge'],
                 "scenario_intersection": progress['scenario_mix']['intersection'],
-            })
+            }
+            if progress.get('modality_mix'):
+                log_data.update({
+                    "modality_lidar": progress['modality_mix'].get('lidar', 0),
+                    "modality_grayscale": progress['modality_mix'].get('grayscale', 0),
+                    "modality_both": progress['modality_mix'].get('both', 0),
+                })
+            wandb.log(log_data)
 
     def _save_checkpoint(self, timesteps, final=False):
         """Save model checkpoint."""
         suffix = "final" if final else f"{timesteps}"
-        save_path = os.path.join(self.models_dir, f"adaptive_{self.modality}_{suffix}.zip")
+        save_path = os.path.join(self.models_dir, f"adaptive_{self.current_modality}_{suffix}.zip")
         self.model.save(save_path)
         print(f"Model saved: {save_path}")
 
-def run_adaptive_curriculum(modality="lidar", total_timesteps=100000, use_attention=True, use_wandb=True, checkpoint_path=None, target_difficulty=1.0):
+def run_adaptive_curriculum(modality="both", total_timesteps=100000, use_attention=True, use_wandb=True, checkpoint_path=None, target_difficulty=1.0, enable_modality_curriculum=True):
     """
-    Run adaptive curriculum training.
+    Run adaptive curriculum training with modality progression.
 
     Args:
-        modality: "lidar" or "grayscale"
+        modality: Base modality ("lidar", "grayscale", or "both")
         total_timesteps: Total training steps
         use_attention: Whether to use attention mechanisms
         use_wandb: Whether to log to Weights & Biases
         checkpoint_path: Path to checkpoint to resume from
         target_difficulty: Target difficulty level to reach (0.0-1.0)
+        enable_modality_curriculum: Whether to enable modality progression
     """
     if use_wandb:
         wandb.init(
             project="autonomous-driving-adaptive",
-            name=f"adaptive-{modality}-{'attention' if use_attention else 'baseline'}-to-{target_difficulty}",
+            name=f"adaptive-{modality}-{'modality' if enable_modality_curriculum else 'single'}-{'attention' if use_attention else 'baseline'}-to-{target_difficulty}",
             config={
                 "modality": modality,
                 "use_attention": use_attention,
                 "total_timesteps": total_timesteps,
                 "checkpoint_path": checkpoint_path,
                 "target_difficulty": target_difficulty,
+                "enable_modality_curriculum": enable_modality_curriculum,
             }
         )
 
-    trainer = AdaptiveTrainer(modality=modality, use_attention=use_attention, checkpoint_path=checkpoint_path)
+    trainer = AdaptiveTrainer(modality=modality, use_attention=use_attention, checkpoint_path=checkpoint_path, enable_modality_curriculum=enable_modality_curriculum)
     final_model = trainer.train_adaptive_curriculum(total_timesteps=total_timesteps, target_difficulty=target_difficulty)
 
     if use_wandb:
