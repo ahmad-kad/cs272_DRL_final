@@ -1,4 +1,45 @@
-# Core environment dependencies
-highway-env>=1.8.2
-gymnasium>=0.29.0
-numpy>=1.24.0
+# ===========================================
+# Autonomous Driving RL Project Requirements
+# ===========================================
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# Notes:
+#   - PyTorch installation may vary based on your CUDA version
+#   - highway-env requires pygame for rendering
+#   - stable-baselines3 works with gymnasium (not gym)
+#   - All versions are based on current working setup
+#
+# ===========================================
+
+# Core RL and Machine Learning Libraries
+stable-baselines3>=2.7.0          # Reinforcement learning algorithms (PPO, etc.)
+torch>=2.6.0                      # PyTorch for neural networks
+torchvision>=0.21.0               # PyTorch computer vision
+
+# Experiment Tracking and Visualization
+wandb>=0.22.0                     # Weights & Biases for experiment tracking
+matplotlib>=3.10.0                # Plotting and visualization
+
+# Environment and Simulation
+highway-env>=1.10.0               # Highway driving simulation environment
+gymnasium>=1.2.0                  # Standardized RL environments API
+pygame>=2.6.0                     # Graphics and rendering (required by highway-env)
+
+# Scientific Computing and Data Processing
+numpy>=2.2.0                      # Numerical computing
+scipy>=1.16.0                     # Scientific computing
+pandas>=2.3.0                     # Data manipulation and analysis
+
+# System and Development Tools
+psutil>=7.1.0                     # System monitoring utilities
+tqdm>=4.67.0                      # Progress bars for training loops
+
+# Testing and Development
+pytest>=8.4.0                     # Testing framework
+
+# Optional: For advanced features (uncomment if needed)
+# tensorboard>=2.15.0              # TensorBoard logging (alternative to wandb)
+# jupyter>=1.0.0                   # Jupyter notebooks for analysis
+# scikit-learn>=1.3.0              # Machine learning utilities
