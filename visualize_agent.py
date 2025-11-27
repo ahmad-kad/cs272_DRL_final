@@ -66,7 +66,7 @@ def visualize_agent(model_path, scenario="intersection", modality="grayscale", m
     episode_count = 0
 
     # Font for displaying info
-    font = pygame.font.Font(None, 24)
+    font = pygame.font.Font(None, 20)
 
     try:
         while running and episode_count < 5:  # Run up to 5 episodes

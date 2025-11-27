@@ -74,10 +74,10 @@ def get_curriculum_config(env_name, difficulty="easy", modality="lidar"):
         "policy_frequency": 1,
         "vehicles_count": density,
         "lanes_count": 4,
-        "screen_width": 600,
-        "screen_height": 150,
-        "centering_position": [0.3, 0.5],
-        "scaling": 5.5,
+        "screen_width": 1000,
+        "screen_height": 900,
+        "centering_position": [0.4, 0.35],
+        "scaling": 6,
     }
 
     # 4. Scenario Specifics
