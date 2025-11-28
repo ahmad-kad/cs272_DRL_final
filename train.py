@@ -2,7 +2,7 @@ import argparse
 import wandb
 from training.train_lidar import run_lidar_curriculum
 from training.train_grayscale import run_grayscale_curriculum
-from training.train_contrastive import ContrastiveTrainer
+# from training.train_contrastive import ContrastiveTrainer
 from training.adaptive_trainer import run_adaptive_curriculum
 
 def main():

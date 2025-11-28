@@ -72,6 +72,9 @@ class UrbanJunctionEnv(AbstractEnv):
             "reward_speed_range": [20, 30],
             "normalize_reward": True,
             "offroad_terminal": True,
+
+            "on_road_reward": 0.2,    # small per-step bonus
+            "offroad_penalty": -2.0,  # strong penalty when off-road (will be clipped to -1)
         })
         return config
 
@@ -308,6 +311,20 @@ class UrbanJunctionEnv(AbstractEnv):
                 Vehicle.create_random(self.road, speed=random_speed, spacing=0.5)
             )
 
+    def _is_offroad(self) -> bool:
+        """
+        Determine if the ego vehicle is off the road.
+
+        Uses vehicle.on_road if available (highway-env),
+        otherwise falls back to lane_index.
+        """
+        # If highway-env exposes this flag, prefer it:
+        if hasattr(self.vehicle, "on_road"):
+            return not self.vehicle.on_road
+
+        # Fallback heuristic: no valid lane_index -> offroad
+        return self.vehicle.lane_index is None
+
     def _reward(self, action: Union[int, np.ndarray]) -> float:
         """
         Calculate the total reward for the current timestep.
@@ -351,6 +368,10 @@ class UrbanJunctionEnv(AbstractEnv):
             "high_speed_reward": np.clip(self.vehicle.speed, 0, 30) / 30,
             "right_lane_reward": self.vehicle.lane_index[2] / (len(neighbours) - 1) if len(neighbours) > 1 else 0,
         }
+
+        is_offroad = self._is_offroad()
+        rewards["on_road_reward"] = 1.0 if not is_offroad else 0.0
+        rewards["offroad_penalty"] = 1.0 if is_offroad else 0.0
 
         # Scenario Specific Rewards
         if self.current_scenario == "intersection":
