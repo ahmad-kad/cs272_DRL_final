@@ -46,28 +46,33 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
 
         # Enhanced reward weights with collision avoidance focus
         self.reward_weights = reward_weights or {
-            # Core safety (stronger proactive penalties)
-            "collision_reward": -20.0,  # Doubled for stronger deterrence
-            "proximity_penalty": -2.0,  # NEW: Penalty for dangerous proximity
-            "offroad_penalty": -5.0,
+            # Core safety (balanced to allow emergency maneuvers)
+            "collision_reward": -15.0,  # Reduced to allow emergency maneuvers
+            "proximity_penalty": -1.5,  # Reduced proximity penalty
+            "offroad_penalty": -6.0,    # Increased for better lane keeping
             "on_road_reward": 0.5,
 
-            # Speed optimization (stronger incentives for collision avoidance)
-            "speed_reward": 2.0,  # Increased weight
-            "collision_avoidance_speed_bonus": 3.0,  # NEW: Bonus for speed adjustments that avoid collisions
+            # Speed optimization
+            "speed_reward": 2.0,
+            "collision_avoidance_speed_bonus": 3.0,
 
-            # Lane management (less restrictive to allow collision avoidance)
-            "lane_position_reward": 0.5,  # Reduced weight
-            "lane_change_penalty": -0.05,  # GREATLY REDUCED (was -0.2)
-            "safe_lane_change_bonus": 1.0,  # NEW: Reward safe collision-avoiding lane changes
+            # Lane management with empty lane incentives
+            "lane_position_reward": 0.5,
+            "lane_change_penalty": -0.05,
+            "safe_lane_change_bonus": 1.0,
+            "empty_lane_bonus": 1.5,       # NEW: Reward choosing lanes with fewer vehicles
+            "lane_traffic_penalty": -0.8,  # NEW: Penalty for heavy traffic lanes
+            "passing_success_bonus": 1.0,  # NEW: Reward for successfully passing
 
             # Progress and completion
             "progress_reward": 0.3,
             "completion_bonus": 2.0,
 
-            # Scenario-specific bonuses
+            # Scenario-specific bonuses and penalties
             "merge_success_bonus": 1.5,
             "intersection_completion": 2.5,
+            "intersection_offroad_penalty": -8.0,  # NEW: Harsher offroad penalty at intersections
+            "corner_cutting_penalty": -2.0,        # NEW: Penalty for cutting corners
 
             # Behavioral shaping
             "time_penalty": -0.01
@@ -116,7 +121,16 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
 
         # Lane management (less restrictive for collision avoidance)
         rewards["lane_change_penalty"] = self._get_lane_change_penalty()
-        rewards["safe_lane_change_bonus"] = self._get_safe_maneuver_bonus()  # NEW
+        rewards["safe_lane_change_bonus"] = self._get_safe_maneuver_bonus()
+
+        # Empty lane and passing incentives
+        rewards["empty_lane_bonus"] = self._get_empty_lane_bonus()
+        rewards["lane_traffic_penalty"] = self._get_lane_traffic_penalty()
+        rewards["passing_success_bonus"] = self._get_passing_success_bonus()
+
+        # Intersection-specific penalties
+        rewards["intersection_offroad_penalty"] = self._get_intersection_offroad_penalty()
+        rewards["corner_cutting_penalty"] = self._get_corner_cutting_penalty()
 
         # Time penalty (encourage efficiency)
         rewards["time_penalty"] = -0.01
@@ -444,6 +458,123 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
 
         return min(bonus, 2.0)  # Cap the bonus to prevent exploitation
 
+    def _get_empty_lane_bonus(self) -> float:
+        """
+        Reward choosing lanes with fewer vehicles ahead.
+        Uses lidar observations to detect traffic density in different lanes.
+        """
+        if self._is_offroad() or self.vehicle.crashed:
+            return 0.0
+
+        # Get vehicle counts per lane
+        lane_vehicle_counts = self._count_vehicles_per_lane()
+        if not lane_vehicle_counts:
+            return 0.0
+
+        current_lane = self.vehicle.lane_index
+        if current_lane not in lane_vehicle_counts:
+            return 0.0
+
+        current_count = lane_vehicle_counts[current_lane]
+        avg_count = sum(lane_vehicle_counts.values()) / len(lane_vehicle_counts)
+
+        # Reward if current lane has fewer vehicles than average
+        if current_count < avg_count:
+            bonus = 1.5 * (avg_count - current_count) / max(avg_count, 1)
+            return min(bonus, 2.0)  # Cap the bonus
+
+        return 0.0
+
+    def _get_lane_traffic_penalty(self) -> float:
+        """
+        Penalize choosing lanes with heavy traffic ahead.
+        """
+        if self._is_offroad() or self.vehicle.crashed:
+            return 0.0
+
+        lane_vehicle_counts = self._count_vehicles_per_lane()
+        if not lane_vehicle_counts:
+            return 0.0
+
+        current_lane = self.vehicle.lane_index
+        if current_lane not in lane_vehicle_counts:
+            return 0.0
+
+        current_count = lane_vehicle_counts[current_lane]
+        max_count = max(lane_vehicle_counts.values())
+
+        # Penalty proportional to traffic density in current lane
+        if current_count > 2:  # Only penalize if lane has more than 2 vehicles
+            penalty = -0.8 * (current_count - 2) / max(max_count, 3)
+            return max(penalty, -2.0)  # Cap the penalty
+
+        return 0.0
+
+    def _get_passing_success_bonus(self) -> float:
+        """
+        Reward successfully passing slower vehicles.
+        Detects when vehicle changes lanes and gains speed advantage.
+        """
+        bonus = 0.0
+
+        # Need previous state for comparison
+        if (self.episode_step_count < 10 or
+            self.prev_lane_index is None or
+            self.prev_speed is None):
+            return 0.0
+
+        # Check if we just changed lanes
+        lane_changed = self.vehicle.lane_index != self.prev_lane_index
+
+        if lane_changed:
+            # Check if we're now going faster (successful pass)
+            speed_improved = self.vehicle.speed > self.prev_speed + 2.0  # Significant speed gain
+
+            # Check if we were behind slower vehicles before
+            was_in_traffic = self._was_in_slow_traffic()
+
+            if speed_improved and was_in_traffic:
+                bonus = 1.0  # Reward successful passing maneuver
+
+        return bonus
+
+    def _get_intersection_offroad_penalty(self) -> float:
+        """
+        Harsher penalty for going offroad at intersections.
+        """
+        if self.current_scenario != "intersection":
+            return 0.0
+
+        is_offroad = self._is_offroad()
+        if is_offroad:
+            return 1.0  # Additional penalty at intersections (weighted by -8.0)
+
+        return 0.0
+
+    def _get_corner_cutting_penalty(self) -> float:
+        """
+        Penalize cutting corners at intersections by detecting sharp turns offroad.
+        """
+        if self.current_scenario != "intersection":
+            return 0.0
+
+        # Simple corner cutting detection: sharp lateral movement while offroad
+        if (self._is_offroad() and
+            hasattr(self.vehicle, 'position') and
+            self.prev_position is not None):
+
+            current_pos = np.array(self.vehicle.position)
+            prev_pos = np.array(self.prev_position)
+
+            # Calculate lateral movement (y-direction in intersection)
+            lateral_movement = abs(current_pos[1] - prev_pos[1])
+
+            # Penalize large lateral movements while offroad (corner cutting)
+            if lateral_movement > 2.0:  # Significant lateral movement
+                return 1.0  # Penalty for corner cutting (weighted by -2.0)
+
+        return 0.0
+
     def _collision_imminent(self, threshold_distance: float = 5.0) -> bool:
         """
         Check if collision is imminent within threshold distance.
@@ -471,15 +602,22 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
         """
         Apply hard safety constraints that override RL actions when necessary.
         This provides a safety net while still allowing RL learning.
+        Includes emergency maneuvers for merge scenarios.
         """
         original_action = action
         safety_override = False
 
         # Constraint 1: Emergency braking for imminent collision
         if self._collision_imminent(threshold_distance=3.0):
-            action = self._emergency_brake_action()
-            safety_override = "emergency_brake"
-            print("🚨 SAFETY OVERRIDE: Emergency braking for imminent collision!")
+            # For merge scenarios, allow emergency lane changes/offroad first
+            if self.current_scenario == "merge" and self._emergency_maneuver_available():
+                action = self._emergency_maneuver_action()
+                safety_override = "emergency_maneuver"
+                print("🚨 SAFETY OVERRIDE: Emergency lane change/offroad for merge!")
+            else:
+                action = self._emergency_brake_action()
+                safety_override = "emergency_brake"
+                print("🚨 SAFETY OVERRIDE: Emergency braking for imminent collision!")
 
         # Constraint 2: Speed limiting
         elif hasattr(self.vehicle, 'speed') and self.vehicle.speed > self._get_max_safe_speed():
@@ -487,18 +625,21 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
             safety_override = "speed_limit"
             print(".1f")
 
-        # Constraint 3: Prevent complete road departure
-        elif hasattr(self.vehicle, 'lane_index') and self.vehicle.lane_index is None:
+        # Constraint 3: Prevent complete road departure (except during emergency maneuvers)
+        elif (hasattr(self.vehicle, 'lane_index') and
+              self.vehicle.lane_index is None and
+              self.last_safety_override != "emergency_maneuver"):
             action = self._road_recovery_action()
             safety_override = "road_recovery"
             print("🛣️ SAFETY OVERRIDE: Road departure prevention!")
 
-        # Constraint 4: Lane keeping (prevent extreme lane deviation)
+        # Constraint 4: Lane keeping (prevent extreme lane deviation, relaxed for intersections)
         elif (hasattr(self.vehicle, 'lane_index') and
               self.vehicle.lane_index is not None and
               len(self.vehicle.lane_index) > 2):
             lane_deviation = abs(self.vehicle.lane_index[2])
-            if lane_deviation > 4.0:  # Way off lane center
+            max_deviation = 6.0 if self.current_scenario == "intersection" else 4.0  # More lenient at intersections
+            if lane_deviation > max_deviation:  # Way off lane center
                 action = self._lane_correction_action()
                 safety_override = "lane_correction"
                 print(".1f")
@@ -551,6 +692,38 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
             current_lane_deviation = self.vehicle.lane_index[2] if self.vehicle.lane_index else 0
             steering_correction = -np.sign(current_lane_deviation) * 0.5  # Steer toward center
             return np.array([steering_correction, 0.2])  # [steering, acceleration]
+
+    def _emergency_maneuver_available(self) -> bool:
+        """
+        Check if emergency maneuver (lane change or offroad) is available.
+        Only allows this in merge scenarios when no safe lane change exists.
+        """
+        if self.current_scenario != "merge":
+            return False
+
+        # Check if we have alternative lanes available
+        try:
+            if hasattr(self.road, 'network') and self.vehicle.lane_index:
+                neighbors = self.road.network.all_side_lanes(self.vehicle.lane_index)
+                return len(neighbors) > 1  # Can change lanes or go offroad
+        except:
+            pass
+
+        return False  # No alternatives available
+
+    def _emergency_maneuver_action(self) -> Union[int, np.ndarray]:
+        """
+        Return emergency maneuver action (lane change or controlled offroad).
+        Prioritizes lane changes over offroad maneuvers.
+        """
+        if hasattr(self.action_space, 'n'):  # Discrete action space
+            # Try lane change first (left or right)
+            return 1  # Assume 1 is left lane change, or try different action
+        else:  # Continuous action space
+            # Emergency steering to change lanes or go offroad
+            # Sharp steering maneuver with maintained speed
+            emergency_steering = 1.0  # Max steering to change lanes
+            return np.array([emergency_steering, 0.5])  # [steering, acceleration]
 
     def get_safety_stats(self):
         """Get safety constraint statistics."""
@@ -721,3 +894,88 @@ class EnhancedUrbanJunctionEnv(UrbanJunctionEnv):
         elif scenario == "intersection":
             return steps >= 80
         return steps >= 100
+
+    def _count_vehicles_per_lane(self) -> dict:
+        """
+        Count vehicles in each lane using lidar observations.
+        Returns a dictionary mapping lane indices to vehicle counts.
+        """
+        lane_counts = {}
+
+        # Get all available lanes
+        if hasattr(self.road, 'network') and self.vehicle.lane_index:
+            try:
+                all_lanes = self.road.network.all_lanes()
+                for lane in all_lanes:
+                    lane_counts[lane.index] = 0
+            except:
+                # Fallback: estimate lanes from current lane
+                if self.vehicle.lane_index not in lane_counts:
+                    lane_counts[self.vehicle.lane_index] = 0
+
+        # Use lidar to count vehicles in each lane
+        if hasattr(self, 'observation') and self.observation is not None:
+            try:
+                # Extract lidar data (assuming lidar comes first in observation)
+                if self.modality == "both":
+                    lidar_size = 32 * 2  # 32 cells * 2 features
+                    if len(self.observation) >= lidar_size:
+                        lidar_obs = self.observation[:lidar_size].reshape(32, 2)
+                        lane_counts = self._count_from_lidar(lidar_obs, lane_counts)
+                elif self.modality == "lidar":
+                    if len(self.observation.shape) >= 2:
+                        lane_counts = self._count_from_lidar(self.observation, lane_counts)
+            except:
+                pass
+
+        return lane_counts
+
+    def _count_from_lidar(self, lidar_obs, lane_counts: dict) -> dict:
+        """
+        Count vehicles per lane from lidar observations using angle-based lane detection.
+        """
+        # Simple lane detection based on angle ranges
+        # This is a simplified version - in practice you'd use more sophisticated lane detection
+        lane_angles = {
+            (0,): (-10, 10),    # Center lane
+            (1,): (-30, -10),   # Left lane
+            (2,): (10, 30),     # Right lane
+        }
+
+        for i in range(len(lidar_obs)):
+            if len(lidar_obs[i]) < 2:
+                continue
+
+            presence = lidar_obs[i][0]
+            angle = lidar_obs[i][1] if len(lidar_obs[i]) > 1 else 0
+
+            if presence > 0.3:  # Vehicle detected
+                # Determine which lane the vehicle is in based on angle
+                for lane_idx, (min_angle, max_angle) in lane_angles.items():
+                    if min_angle <= angle <= max_angle:
+                        if lane_idx in lane_counts:
+                            lane_counts[lane_idx] += 1
+                        break
+
+        return lane_counts
+
+    def _was_in_slow_traffic(self) -> bool:
+        """
+        Check if vehicle was previously in slow traffic (behind slower vehicles).
+        """
+        if self.prev_speed is None:
+            return False
+
+        # Check if previous speed was significantly below optimal
+        optimal_speed = self._get_scenario_speed_optimal()
+        return self.prev_speed < optimal_speed * 0.7  # Below 70% of optimal speed
+
+    def _get_scenario_speed_optimal(self) -> float:
+        """Get optimal speed for current scenario."""
+        if self.current_scenario == "highway":
+            return 25.0
+        elif self.current_scenario == "merge":
+            return 20.0
+        elif self.current_scenario == "intersection":
+            return 12.0
+        return 20.0
