@@ -18,7 +18,7 @@ from stable_baselines3 import PPO
 from environments.urban_junction_env import UrbanJunctionEnv
 from utils.config import get_curriculum_config
 
-def visualize_agent(model_path, scenario="merge", modality="lidar", max_steps=200, delay=0.1):
+def visualize_agent(model_path, scenario="highway", modality="lidar", max_steps=200, delay=0.1):
     """
     Visualize a trained agent driving in the specified scenario.
 

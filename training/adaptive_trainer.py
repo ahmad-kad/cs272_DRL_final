@@ -80,8 +80,8 @@ class AdaptiveCurriculum:
     def _get_scenario_mix(self, difficulty: float) -> Dict[str, float]:
         """Intersection-focused scenario mixing for enhanced intersection performance."""
 
-        # ONLY MERGE
-        return {"highway": 0.0, "merge": 1.0, "intersection": 0.0}
+        # ONLY Highway
+        return {"highway": 1.0, "merge": 0.0, "intersection": 0.0}
 
         if difficulty < 0.3:
             # Foundation: Pure highway mastery
@@ -283,7 +283,7 @@ class AdaptiveTrainer:
             gae_lambda=0.95,
             gamma=0.99,
             clip_range=0.2,
-            ent_coef=0.01,
+            ent_coef=0.03, # Higher exploration
             vf_coef=0.5,
         )
 
@@ -436,7 +436,7 @@ class AdaptiveTrainer:
         def make_env():
 
             # Hardcoding merge lidar run
-            scenario = "merge"
+            scenario = "highway"
             sampled_modality = self.base_modality
 
             # Select scenario based on mixing weights

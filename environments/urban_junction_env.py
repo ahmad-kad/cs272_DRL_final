@@ -68,14 +68,16 @@ class UrbanJunctionEnv(AbstractEnv):
             "lanes_count": 4,
             "collision_reward": -4,   # harsher
             "high_speed_reward": 0.2,
-            "arrived_reward": 1.0,
-            "reward_speed_range": [20, 30],
+            "arrived_reward": 1.0, # Change to lower
+            "reward_speed_range": [20, 30], # Change to lower
             "normalize_reward": True,
 
             "offroad_terminal": False,  # allow recovery at first
 
             "on_road_reward": 0.3,      # keep small bonus
             "offroad_penalty": -4.0,    # harsher penalty
+
+            "lane_change_reward": 0.1,   # small bonus when you actually change lanes
         
             })
         return config
@@ -110,6 +112,9 @@ class UrbanJunctionEnv(AbstractEnv):
         self.scenario_input = scenario
         self.current_scenario = scenario
         self.render_mode = render_mode
+
+        # Encourage changing lanes
+        self.last_lane_index = 0
 
         # Standardize Observation Configs
         self.obs_configs = {
@@ -372,9 +377,18 @@ class UrbanJunctionEnv(AbstractEnv):
                                 if len(neighbours) > 1 else 0,
             }
 
+        # Offroad rewards
         is_offroad = self._is_offroad()
         rewards["on_road_reward"] = 1.0 if not is_offroad else 0.0
         rewards["offroad_penalty"] = 1.0 if is_offroad else 0.0
+
+        # Lane changing rewards
+        current_lane = self.vehicle.lane_index[2] if self.vehicle.lane_index else 0
+        if current_lane != self.last_lane_index:
+            rewards["lane_change_reward"] = 1.0
+        else:
+            rewards["lane_change_reward"] = 0.0
+
 
         if not is_offroad and not self.vehicle.crashed:
             rewards["high_speed_reward"] = np.clip(self.vehicle.speed, 0, 30) / 30
@@ -441,6 +455,10 @@ class UrbanJunctionEnv(AbstractEnv):
             done = terminated or truncated
         else:
             obs, reward, done, info = step_result
+
+        current_lane = self.vehicle.lane_index[2] if self.vehicle.lane_index else 0
+        self.last_lane_index = current_lane
+
 
         if self.modality == "both":
             # Generate grayscale observation and combine

@@ -44,7 +44,7 @@ Examples:
                        help="Agent modality (lidar recommended)")
     parser.add_argument("--attention", action="store_true",
                        help="Enable attention mechanisms (lidar only)")
-    parser.add_argument("--timesteps", type=int, default=200000, #up to 200k from 50k
+    parser.add_argument("--timesteps", type=int, default=50000, #up to 200k from 50k
                        help="Total training timesteps")
     parser.add_argument("--base-model", type=str,
                        help="Path to base model for contrastive fine-tuning")
