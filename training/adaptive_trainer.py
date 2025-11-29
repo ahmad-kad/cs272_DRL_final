@@ -23,6 +23,14 @@ class AdaptiveCurriculum:
     """
 
     def __init__(self, min_difficulty=0.0, max_difficulty=1.0, enable_modality_curriculum=True):
+        """
+        Initialize the difficulty manager.
+
+        Args:
+            min_difficulty: Minimum difficulty level (0.0 = easiest)
+            max_difficulty: Maximum difficulty level (1.0 = hardest)
+            enable_modality_curriculum: Whether to enable progressive modality learning
+        """
         self.difficulty_level = min_difficulty
         self.min_difficulty = min_difficulty
         self.max_difficulty = max_difficulty
@@ -226,6 +234,24 @@ class AdaptiveCurriculum:
 
 class AdaptiveTrainer:
     """
+    Adaptive curriculum learning trainer for autonomous driving agents.
+
+    This class implements progressive learning strategies that adapt the training
+    difficulty and curriculum based on agent performance. It supports multiple
+    scenarios (highway, merge, intersection) and modalities (lidar, grayscale, both).
+
+    Features:
+    - Progressive curriculum advancement
+    - Performance-based difficulty scaling
+    - Multi-scenario and multi-modality support
+    - Comprehensive logging and monitoring
+
+    Attributes:
+        curriculum_phases: List of curriculum phases with difficulty progression
+        current_phase: Current training phase index
+        performance_history: Historical performance metrics
+    """
+    """
     Trainer that uses performance-driven curriculum learning.
     """
 
@@ -296,7 +322,7 @@ class AdaptiveTrainer:
 
             # Special handling for final model - start at 0.96 for mastery training
             if "final" in checkpoint_name:
-                self.curriculum.difficulty_level = 0.96
+                self.curriculum.difficulty_level = 0.50
                 print("Starting mastery training at difficulty 0.96")
                 return
 
@@ -434,6 +460,12 @@ class AdaptiveTrainer:
         from stable_baselines3.common.vec_env import DummyVecEnv
 
         def make_env():
+            """
+            Create a vectorized environment for training.
+
+            Returns:
+                DummyVecEnv: Vectorized environment wrapper
+            """
 
             # Hardcoding merge lidar run
             scenario = "highway"
