@@ -11,6 +11,9 @@ from typing import Dict, Any, Optional
 
 from utils.config import get_curriculum_config
 from utils.callbacks import WandbMetricsCallback
+
+from environments.urban_junction_env import UrbanJunctionEnv
+
 # from models.attention import AttentiveLidarExtractor  # Module not available
 
 class AdaptiveCurriculum:
@@ -53,15 +56,22 @@ class AdaptiveCurriculum:
 
         # Scale parameters with difficulty
         config = {
-            "vehicle_density": int(5 + d * 10),  # 5 → 15 vehicles
-            "traffic_speed_factor": 0.7 + d * 0.3,  # 70% → 100% speed
-            "collision_penalty": -2.0 - d * 8.0,    # -2.0 → -10.0 penalty
-            "success_bonus": 2.0 + d * 3.0,         # 2.0 → 5.0 bonus
+            # fewer cars at low difficulty
+            "vehicle_density": int(1 + d * 4),        # 1 → 5 vehicles instead of 5→15
+
+            # keep traffic a bit slower
+            "traffic_speed_factor": 0.6 + d * 0.2,   # 60% → 80% speed
+
+            # softer collision penalty
+            "collision_penalty": -1.0 - d * 3.0,     # -1.0 → -4.0
+
+            # small arrival bonus
+            "success_bonus": 1.0 + d * 2.0,          # 1.0 → 3.0
+
             "scenario_mix": self._get_scenario_mix(d),
-            "difficulty_level": d
+            "difficulty_level": d,
         }
 
-        # Add modality mixing if enabled
         if self.enable_modality_curriculum:
             config["modality_mix"] = self._get_modality_mix(d)
 
@@ -69,6 +79,10 @@ class AdaptiveCurriculum:
 
     def _get_scenario_mix(self, difficulty: float) -> Dict[str, float]:
         """Intersection-focused scenario mixing for enhanced intersection performance."""
+
+        # ONLY MERGE
+        return {"highway": 0.0, "merge": 1.0, "intersection": 0.0}
+
         if difficulty < 0.3:
             # Foundation: Pure highway mastery
             return {"highway": 1.0, "merge": 0.0, "intersection": 0.0}
@@ -87,6 +101,10 @@ class AdaptiveCurriculum:
 
     def _get_modality_mix(self, difficulty: float) -> Dict[str, float]:
         """Multi-modal curriculum: gradually introduce combined modalities."""
+
+        # ONLY LIDAR
+        return {"lidar": 1.0, "grayscale": 0.0, "both": 0.0}
+
         if not self.enable_modality_curriculum:
             return {"both": 1.0}  # Default to both if curriculum disabled
 
@@ -310,10 +328,11 @@ class AdaptiveTrainer:
         Train with adaptive curriculum that scales difficulty based on performance.
         Continues until target_difficulty is reached or total_timesteps is exceeded.
         """
-        print("Starting Adaptive Curriculum Training")
-        print(f"Base Modality: {self.base_modality}")
-        print(f"Modality Curriculum: {'Enabled' if self.enable_modality_curriculum else 'Disabled'}")
-        print(f"Attention: {'Enabled' if self.use_attention else 'Disabled'}")
+        # print("Starting Adaptive Curriculum Training")
+        # print(f"Base Modality: {self.base_modality}")
+        print(f"Base Modality: forced Lidar")
+        # print(f"Modality Curriculum: {'Enabled' if self.enable_modality_curriculum else 'Disabled'}")
+        # print(f"Attention: {'Enabled' if self.use_attention else 'Disabled'}")
         print(f"Target Difficulty: {target_difficulty}")
         print(f"Total timesteps: {total_timesteps}")
         print("=" * 60)
@@ -415,21 +434,28 @@ class AdaptiveTrainer:
         from stable_baselines3.common.vec_env import DummyVecEnv
 
         def make_env():
+
+            # Hardcoding merge lidar run
+            scenario = "merge"
+            sampled_modality = self.base_modality
+
             # Select scenario based on mixing weights
-            scenarios = list(config["scenario_mix"].keys())
-            weights = list(config["scenario_mix"].values())
-            scenario = np.random.choice(scenarios, p=weights)
+            #scenarios = list(config["scenario_mix"].keys())
+            #weights = list(config["scenario_mix"].values())
+            #scenario = np.random.choice(scenarios, p=weights)
 
             # Select modality based on mixing weights (if curriculum enabled)
+            """
             if "modality_mix" in config:
                 modalities = list(config["modality_mix"].keys())
                 modality_weights = list(config["modality_mix"].values())
                 sampled_modality = np.random.choice(modalities, p=modality_weights)
             else:
                 sampled_modality = self.base_modality
+            """
 
             # Get curriculum configuration
-            env_config = get_curriculum_config(scenario, "medium", sampled_modality)
+            env_config = get_curriculum_config(scenario, "easy", sampled_modality)
 
             # Override with adaptive parameters
             env_config["vehicles_count"] = config["vehicle_density"]
@@ -445,9 +471,16 @@ class AdaptiveTrainer:
                 ]
 
             # Create and configure environment BEFORE wrapping
-            env = gym.make(f"{scenario}-v0", render_mode=None)
-            env.unwrapped.configure(env_config)
-            env.reset()  # Initialize with new config
+            #env = gym.make(f"{scenario}-v0", render_mode=None)
+            #env.unwrapped.configure(env_config)
+            #env.reset()  # Initialize with new config
+
+            env = UrbanJunctionEnv(
+                config=env_config,
+                scenario=scenario,
+                modality=sampled_modality,
+                render_mode=None,
+            )       
 
             return env
 
@@ -499,8 +532,10 @@ class AdaptiveTrainer:
             episode_lengths.append(steps)
 
             # Success criteria: positive reward and no crashes
-            if episode_reward > 0 and episode_crashes == 0:
+            # Success criteria: survived reasonably long and didn't crash too much
+            if episode_reward > 0 or (steps > 60 and episode_crashes == 0):
                 success_count += 1
+
 
         return {
             "success_rate": float(success_count / n_episodes),

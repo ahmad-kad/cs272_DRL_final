@@ -54,10 +54,10 @@ class UrbanJunctionEnv(AbstractEnv):
         config.update({
             "observation": {
                 "type": "LidarObservation",
-                "cells": 64,
+                "cells": 32,
                 "maximum_range": 50,
                 "normalize": True,
-                "features": ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"],
+                "features": ["presence", "x"],
             },
             "action": {
                 "type": "DiscreteMetaAction", # More stable than Continuous for merging
@@ -66,16 +66,18 @@ class UrbanJunctionEnv(AbstractEnv):
             "policy_frequency": 1,
             "duration": 40,  # [s]
             "lanes_count": 4,
-            "collision_reward": -1.0,
-            "high_speed_reward": 0.4,
+            "collision_reward": -4,   # harsher
+            "high_speed_reward": 0.2,
             "arrived_reward": 1.0,
             "reward_speed_range": [20, 30],
             "normalize_reward": True,
-            "offroad_terminal": True,
 
-            "on_road_reward": 0.2,    # small per-step bonus
-            "offroad_penalty": -2.0,  # strong penalty when off-road (will be clipped to -1)
-        })
+            "offroad_terminal": False,  # allow recovery at first
+
+            "on_road_reward": 0.3,      # keep small bonus
+            "offroad_penalty": -4.0,    # harsher penalty
+        
+            })
         return config
 
     def __init__(
@@ -113,10 +115,10 @@ class UrbanJunctionEnv(AbstractEnv):
         self.obs_configs = {
             "lidar": {
                 "type": "LidarObservation",
-                "cells": 64,
+                "cells": 32,
                 "maximum_range": 50,
                 "normalize": True,
-                "features": ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"]
+                "features": ["presence", "x"]
             },
             "grayscale": {
                 "type": "GrayscaleObservation", 
@@ -154,7 +156,7 @@ class UrbanJunctionEnv(AbstractEnv):
             n_features = len(self.obs_configs["lidar"]["features"])
             self.observation_space = spaces.Box(
                 low=-1.0, high=1.0,
-                shape=(self.obs_configs["lidar"]["cells"] * n_features,),
+                shape=(self.obs_configs["lidar"]["cells"], n_features),  # -> (32, 2)
                 dtype=np.float32
             )
         elif self.modality == "grayscale":
@@ -365,13 +367,19 @@ class UrbanJunctionEnv(AbstractEnv):
 
         rewards = {
             "collision_reward": self.vehicle.crashed,
-            "high_speed_reward": np.clip(self.vehicle.speed, 0, 30) / 30,
-            "right_lane_reward": self.vehicle.lane_index[2] / (len(neighbours) - 1) if len(neighbours) > 1 else 0,
-        }
+            "high_speed_reward": 0.0, # Default to 0
+            "right_lane_reward": self.vehicle.lane_index[2] / (len(neighbours) - 1)
+                                if len(neighbours) > 1 else 0,
+            }
 
         is_offroad = self._is_offroad()
         rewards["on_road_reward"] = 1.0 if not is_offroad else 0.0
         rewards["offroad_penalty"] = 1.0 if is_offroad else 0.0
+
+        if not is_offroad and not self.vehicle.crashed:
+            rewards["high_speed_reward"] = np.clip(self.vehicle.speed, 0, 30) / 30
+        else:
+            rewards["high_speed_reward"] = 0.0
 
         # Scenario Specific Rewards
         if self.current_scenario == "intersection":

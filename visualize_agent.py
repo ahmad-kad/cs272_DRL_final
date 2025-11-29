@@ -18,7 +18,7 @@ from stable_baselines3 import PPO
 from environments.urban_junction_env import UrbanJunctionEnv
 from utils.config import get_curriculum_config
 
-def visualize_agent(model_path, scenario="intersection", modality="grayscale", max_steps=200, delay=0.1):
+def visualize_agent(model_path, scenario="merge", modality="lidar", max_steps=200, delay=0.1):
     """
     Visualize a trained agent driving in the specified scenario.
 
@@ -35,7 +35,7 @@ def visualize_agent(model_path, scenario="intersection", modality="grayscale", m
     print("-" * 50)
 
     # Get configuration
-    config = get_curriculum_config(scenario, "hard", modality)
+    config = get_curriculum_config(scenario, "easy", modality)
 
     # Initialize pygame
     pygame.init()
@@ -180,10 +180,10 @@ def visualize_agent(model_path, scenario="intersection", modality="grayscale", m
 def main():
     parser = argparse.ArgumentParser(description="Visualize trained agent driving")
     parser.add_argument("--model", required=True, help="Path to trained model (.zip)")
-    parser.add_argument("--scenario", default="intersection",
+    parser.add_argument("--scenario", default="merge",
                        choices=["highway", "merge", "intersection"],
                        help="Scenario to visualize")
-    parser.add_argument("--modality", default="grayscale",
+    parser.add_argument("--modality", default="lidar",
                        choices=["grayscale", "lidar", "both"],
                        help="Observation modality")
     parser.add_argument("--max-steps", type=int, default=200,
