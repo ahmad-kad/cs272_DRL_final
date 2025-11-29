@@ -6,7 +6,7 @@ Successfully tested the autonomous driving models across different environments.
 
 ## Test Results
 
-### ✅ Grayscale Model Performance
+### Grayscale Model Performance
 
 **Model**: `adaptive_grayscale_final.zip`
 **Observation Space**: `Box(0, 255, (4, 128, 64), uint8)`
@@ -24,15 +24,15 @@ Successfully tested the autonomous driving models across different environments.
 - Shows robustness across different traffic scenarios
 - Vision-based approach works well for complex intersection navigation
 
-### ❌ Other Models - Observation Space Issues
+### Other Models - Observation Space Issues
 
 **Issue**: Models have incompatible observation spaces with current `UrbanJunctionEnv`
 
 | Model | Saved Obs Space | UrbanJunctionEnv Creates | Status |
 |-------|----------------|------------------------|--------|
-| `adaptive_lidar_final.zip` | `Box(-1.0, 1.0, (32, 2), float32)` | `Box(-1.0, 1.0, (64, 2), float32)` | ❌ Mismatch |
-| `adaptive_both_final.zip` | `Box(-1.0, 1.0, (32, 2), float32)` | `Box(-inf, inf, (33216,), float32)` | ❌ Mismatch |
-| `ensemble_late_fusion_final.zip` | `Box(-inf, inf, (32896,), float32)` | `Box(-inf, inf, (33216,), float32)` | ❌ Close but different |
+| `adaptive_lidar_final.zip` | `Box(-1.0, 1.0, (32, 2), float32)` | `Box(-1.0, 1.0, (64, 2), float32)` | Mismatch |
+| `adaptive_both_final.zip` | `Box(-1.0, 1.0, (32, 2), float32)` | `Box(-inf, inf, (33216,), float32)` | Mismatch |
+| `ensemble_late_fusion_final.zip` | `Box(-inf, inf, (32896,), float32)` | `Box(-inf, inf, (33216,), float32)` | Close but different |
 
 **Root Cause**: Models were trained with different observation processing configurations than current `UrbanJunctionEnv` implementation.
 
@@ -75,10 +75,10 @@ The **grayscale model** works perfectly because:
 
 | Model Type | Status | Recommended Use |
 |------------|--------|-----------------|
-| Grayscale Vision | ✅ **Ready** | Primary model for intersection-heavy scenarios |
-| Lidar Only | ❌ **Needs Retraining** | Not deployable in current state |
-| Multi-Modal (Both) | ❌ **Needs Retraining** | Not deployable in current state |
-| Late Fusion | ❌ **Needs Retraining** | Not deployable in current state |
+| Grayscale Vision | **Ready** | Primary model for intersection-heavy scenarios |
+| Lidar Only | **Needs Retraining** | Not deployable in current state |
+| Multi-Modal (Both) | **Needs Retraining** | Not deployable in current state |
+| Late Fusion | **Needs Retraining** | Not deployable in current state |
 
 ## Performance Insights
 

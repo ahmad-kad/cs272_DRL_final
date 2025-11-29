@@ -2,7 +2,7 @@
 
 This document describes the curriculum learning approach implemented to teach autonomous driving agents to effectively use both lidar and grayscale observations simultaneously.
 
-## 🎯 **Curriculum Overview**
+## **Curriculum Overview**
 
 The curriculum progressively teaches multi-modal learning through carefully staged difficulty and modality progression:
 
@@ -73,7 +73,7 @@ def make_env():
     return UrbanJunctionEnv(scenario=scenario, modality=modality)
 ```
 
-## 🚀 **Usage**
+## **Usage**
 
 ### **Run Full Curriculum Training**
 
@@ -103,7 +103,7 @@ Progress @ 25,000 timesteps:
    Modality Mix: {'lidar': 0.6, 'grayscale': 0.4, 'both': 0.0}
 ```
 
-## 📊 **Benefits of Curriculum Learning**
+## **Benefits of Curriculum Learning**
 
 ### **Learning Efficiency**
 - **Gradual Complexity**: Prevents overwhelming the agent with multi-modal complexity early
@@ -141,7 +141,7 @@ print(f"Modality Mix: {progress['modality_mix']}")
 print(f"Scenario Mix: {progress['scenario_mix']}")
 ```
 
-## 🎯 **Advanced Features**
+## **Advanced Features**
 
 ### **Adaptive Modality Weights**
 
@@ -157,17 +157,17 @@ Advanced curriculum could correlate scenarios with modalities:
 - Urban scenarios → Emphasize grayscale (close-range detail)
 - Combined scenarios → Full multi-modal training
 
-## 📁 **Files Modified**
+## **Files Modified**
 
 - `training/adaptive_trainer.py`: Enhanced with modality curriculum
 - `environments/urban_junction_env.py`: Native "both" modality support
 - `train_curriculum_both.py`: Curriculum training script
 
-## 🚀 **Next Steps**
+## **Next Steps**
 
 1. **Performance Evaluation**: Compare curriculum vs direct training
 2. **Adaptive Weights**: Implement performance-based modality adjustment
 3. **Scenario Correlation**: Add scenario-specific modality preferences
 4. **Transfer Learning**: Use curriculum-trained models as starting points
 
-The curriculum learning approach provides a systematic way to teach multi-modal autonomous driving, ensuring agents develop strong foundations before tackling the complexity of sensor fusion! 🎓🚗
+The curriculum learning approach provides a systematic way to teach multi-modal autonomous driving, ensuring agents develop strong foundations before tackling the complexity of sensor fusion!

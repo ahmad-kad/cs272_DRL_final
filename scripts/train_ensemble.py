@@ -40,7 +40,7 @@ from training.ensemble_models import (
     TrainableEnsemble
 )
 from utils.config import get_curriculum_config
-from utils.callbacks import WandbMetricsCallback
+from utils.callbacks import WandbMetricsCallback, StratifiedMetricsCallback
 # from training.adaptive_trainer import AdaptiveCurriculum  # Avoid import due to missing models module
 
 
@@ -124,7 +124,11 @@ def train_late_fusion_model(
     )
 
     # Setup callbacks
-    callbacks = [WandbMetricsCallback()]
+    callbacks = [StratifiedMetricsCallback(verbose=1)]  # Comprehensive metrics tracking
+
+    if use_wandb:
+        callbacks.append(WandbMetricsCallback())
+
     checkpoint_cb = CheckpointCallback(
         save_freq=10000,
         save_path="outputs/models",

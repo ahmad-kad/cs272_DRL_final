@@ -1,93 +1,42 @@
 import gymnasium as gym
 import numpy as np
+from config import ObservationConfigFactory, BaseEnvironmentConfig, RewardConfig, ScenarioConfigFactory
+from constants import TrainingConstants
 
-def get_curriculum_config(env_name, difficulty="easy", modality="lidar"):
+
+def get_curriculum_config(env_name: str, difficulty: str = "easy", modality: str = "lidar") -> dict:
     """
     Returns environment configuration based on difficulty and modality.
-    
+
     Difficulties:
     - easy: Low traffic, lenient rewards (Learning dynamics)
     - medium: Moderate traffic, standard rewards (Learning interaction)
     - hard: Dense traffic, strict penalties (Mastery & Safety)
+
+    Args:
+        env_name: Name of the environment (e.g., "highway-v0", "merge-v0")
+        difficulty: Difficulty level ("easy", "medium", "hard")
+        modality: Observation modality ("lidar", "grayscale", "both")
+
+    Returns:
+        Complete environment configuration dictionary
     """
-    
-    # 1. Observation Configuration
-    if modality == "lidar":
-        obs_config = {
-            "type": "LidarObservation",
-            "cells": 32,
-            "row_anchor": [0.5, 0.5],
-            "features": ["presence", "distance", "speed"],
-            "features_range": {"distance": [0, 50], "speed": [-30, 30]}
-        }
-    elif modality == "grayscale":
-        obs_config = {
-            "type": "GrayscaleObservation",
-            "observation_shape": (128, 64),
-            "stack_size": 4,
-            "weights": [0.2989, 0.5870, 0.1140],
-            "scaling": 1.75,
-        }
-    elif modality == "both":
-        # For "both" modality, use lidar config as base (environment handles combination)
-        obs_config = {
-            "type": "LidarObservation",
-            "cells": 32,
-            "row_anchor": [0.5, 0.5],
-            "features": ["presence", "distance", "speed"],
-            "features_range": {"distance": [0, 50], "speed": [-30, 30]}
-        }
-    else:
-        raise ValueError(f"Unknown modality: {modality}")
+    if difficulty not in TrainingConstants.DIFFICULTIES:
+        raise ValueError(f"Unknown difficulty: {difficulty}. Must be one of {TrainingConstants.DIFFICULTIES}")
 
-    # 2. Difficulty Parameters
-    if difficulty == "easy":
-        density = 10
-        duration = 40
-        collision_reward = -2.0
-        high_speed_reward = 0.2
-        reward_speed_range = [10, 30]
-    elif difficulty == "medium":
-        density = 20
-        duration = 40
-        collision_reward = -5.0
-        high_speed_reward = 0.5
-        reward_speed_range = [20, 30]
-    elif difficulty == "hard":
-        density = 30
-        duration = 60
-        collision_reward = -10.0
-        high_speed_reward = 0.8
-        reward_speed_range = [25, 35]
-    else:
-        raise ValueError(f"Unknown difficulty: {difficulty}")
+    # Build configuration from components
+    config = BaseEnvironmentConfig.get_config(
+        duration_override=BaseEnvironmentConfig.get_duration_for_difficulty(difficulty)
+    )
 
-    # 3. Base Configuration
-    config = {
-        "observation": obs_config,
-        "action": {"type": "DiscreteMetaAction"},
-        "duration": duration,
-        "collision_reward": collision_reward,
-        "high_speed_reward": high_speed_reward,
-        "reward_speed_range": reward_speed_range,
-        "simulation_frequency": 15,
-        "policy_frequency": 1,
-        "vehicles_count": density,
-        "lanes_count": 4,
-        "screen_width": 1000,
-        "screen_height": 900,
-        "centering_position": [0.4, 0.35],
-        "scaling": 6,
-    }
+    # Add reward configuration
+    config.update(RewardConfig.get_by_difficulty(difficulty))
 
-    # 4. Scenario Specifics
-    if "merge" in env_name:
-        config["vehicles_count"] = max(5, density // 2)
-        config["merging_vehicle_probability"] = 0.3 if difficulty == "easy" else 0.6
-    elif "intersection" in env_name:
-        config["vehicles_count"] = max(5, density // 3)
-        config["spawn_probability"] = 0.2 if difficulty == "easy" else 0.5
-        config["arrived_reward"] = 6.0 # Bonus for intersection completion
-        
+    # Add scenario-specific configuration
+    config.update(ScenarioConfigFactory.create_config(env_name, difficulty))
+
+    # Add observation configuration
+    config["observation"] = ObservationConfigFactory.create_config(modality, use_curriculum_features=True)
+
     return config
 
