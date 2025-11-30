@@ -1,41 +1,36 @@
 import time
-import gymnasium as gym
-import highway_env  # noqa: F401
 from stable_baselines3 import PPO
+from multi_scenario_env import MultiScenarioHighwayEnv
 
 
-def main(model_path="outputs/models/merge_v0_ppo_final.zip", episodes=5, delay=0.05):
-    # Use same config as training (if you changed to LidarObservation, copy it here)
-    config = {
-        "observation": {
+def main(model_path="outputs/models/multi_scenario_lidar_ppo_500k.zip",
+         episodes: int = 5,
+         delay: float = 0.05):
+
+    env = MultiScenarioHighwayEnv(
+        env_ids=["highway-v0", "merge-v0", "intersection-v0"],
+        observation_config={
             "type": "LidarObservation",
             "cells": 32,
             "maximum_range": 60,
             "normalize": True,
-            # if you specified "features" during training, include them here too
-            # "features": ["presence", "vx"],  # example
         },
-        "simulation_frequency": 15,
-        "policy_frequency": 5,
-        "offscreen_rendering": False,
-    }
-
-    env = gym.make(
-        "merge-v0",
         render_mode="rgb_array",
-        config=config,
+        aggressiveness=1.0,  # <--- match “hard” end of curriculum
     )
-
 
     model = PPO.load(model_path)
     print(f"[LOAD] Model loaded from {model_path}")
 
     for ep in range(1, episodes + 1):
         obs, info = env.reset()
+        scenario = info.get("scenario", "unknown")
         done = False
         truncated = False
         ep_reward = 0.0
         steps = 0
+
+        print(f"\n[EPISODE {ep}] Scenario: {scenario}")
 
         while not (done or truncated):
             action, _ = model.predict(obs, deterministic=True)
@@ -46,7 +41,7 @@ def main(model_path="outputs/models/merge_v0_ppo_final.zip", episodes=5, delay=0
             env.render()
             time.sleep(delay)
 
-        print(f"Episode {ep}: steps={steps}, reward={ep_reward:.2f}")
+        print(f"Episode {ep} finished in scenario {scenario}: steps={steps}, reward={ep_reward:.2f}")
 
     env.close()
 
