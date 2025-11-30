@@ -31,7 +31,7 @@ def make_merge_env():
     env = Monitor(env)                  # record ep_len / ep_rew etc.
     return env
 
-def main(total_timesteps=300_000, model_path="merge_v0_ppo_lidar_better.zip"):
+def main(total_timesteps=250_000, model_path="merge_v0_ppo_lidar_better.zip"):
     # 4 parallel environments for better exploration
     env = DummyVecEnv([make_merge_env for _ in range(4)])
 
@@ -51,4 +51,4 @@ def main(total_timesteps=300_000, model_path="merge_v0_ppo_lidar_better.zip"):
 
 if __name__ == "__main__":
     # You can change this or later add argparse
-    main(total_timesteps=200_000, model_path="outputs/models/merge_v0_ppo_200k.zip")
+    main(total_timesteps=100_000, model_path="outputs/models/merge_v0_ppo_100k.zip")
