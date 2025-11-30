@@ -1,9 +1,0 @@
-FINAL MODEL COMPARISON SUMMARY
-==================================================
-
-Overall Performance Rankings:
-
-1. Grayscale Only
-.3f.2f.3f   Scenarios Tested: 3
-   Total Combinations: 3
-
