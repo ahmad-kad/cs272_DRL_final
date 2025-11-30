@@ -112,7 +112,7 @@ class MultiScenarioHighwayEnv(gym.Env):
         # Base vehicles per scenario
         base_vehicles = {
             "highway-v0": 20,
-            "merge-v0": 18,
+            "merge-v0": 20,
             "intersection-v0": 10,
         }
         base = base_vehicles.get(env_id, 20)

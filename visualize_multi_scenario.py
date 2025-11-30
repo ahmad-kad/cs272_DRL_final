@@ -16,7 +16,7 @@ def main(model_path="outputs/models/multi_scenario_lidar_ppo_750k.zip",
             "normalize": True,
         },
         render_mode="rgb_array",
-        aggressiveness=1.0,  # <--- match “hard” end of curriculum
+        aggressiveness=0.5,  # <--- match “hard” end of curriculum
     )
 
     model = PPO.load(model_path)
