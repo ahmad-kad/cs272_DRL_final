@@ -32,7 +32,8 @@ def make_merge_env():
     return env
 
 def main(total_timesteps=300_000, model_path="merge_v0_ppo_lidar_better.zip"):
-    env = make_vec_env(make_merge_env, n_envs=4)
+    # 4 parallel environments for better exploration
+    env = DummyVecEnv([make_merge_env for _ in range(4)])
 
     model = PPO(
         "MlpPolicy",
