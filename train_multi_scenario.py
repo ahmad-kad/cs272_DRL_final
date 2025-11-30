@@ -74,8 +74,8 @@ class AggressionCurriculumCallback(BaseCallback):
 
 
 def main(
-    total_timesteps: int = 500_000,
-    model_path: str = "outputs/models/multi_scenario_lidar_ppo_500k.zip",
+    total_timesteps: int = 750_000,
+    model_path: str = "outputs/models/multi_scenario_lidar_ppo_750k.zip",
 ):
     # 4 parallel copies of the multi-scenario env
     env = DummyVecEnv([make_multi_env for _ in range(4)])

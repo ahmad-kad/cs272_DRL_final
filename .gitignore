@@ -105,6 +105,8 @@ tensorboard/
 wandb/
 lightning_logs/
 mlruns/
+tb_mutli_scenario/
+tb_merge_v0/
 
 # Temporary files
 *.tmp

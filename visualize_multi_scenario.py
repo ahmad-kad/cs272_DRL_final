@@ -3,7 +3,7 @@ from stable_baselines3 import PPO
 from multi_scenario_env import MultiScenarioHighwayEnv
 
 
-def main(model_path="outputs/models/multi_scenario_lidar_ppo_500k.zip",
+def main(model_path="outputs/models/multi_scenario_lidar_ppo_750k.zip",
          episodes: int = 5,
          delay: float = 0.05):
 
