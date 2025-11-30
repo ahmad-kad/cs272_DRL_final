@@ -7,6 +7,7 @@ import gymnasium as gym
 import highway_env  # noqa: F401  # needed to register highway-env environments
 from gymnasium import spaces
 
+from highway_env.vehicle.behavior import AggressiveVehicle
 
 class MultiScenarioHighwayEnv(gym.Env):
     """
@@ -145,19 +146,7 @@ class MultiScenarioHighwayEnv(gym.Env):
         return cfg
 
 
-    def reset(
-        self,
-        *,
-        seed: Optional[int] = None,
-        options: Optional[dict] = None,
-    ) -> Tuple[Any, Dict[str, Any]]:
-        """
-        Reset the environment:
-          * pick a random scenario
-          * configure its difficulty based on aggressiveness
-          * reset the underlying highway-env
-        """
-        # Select scenario for this episode
+    def reset(self, seed=None, options=None):
         self._select_scenario()
         assert self.current_env is not None
         env_id = self.current_env_id
@@ -176,16 +165,155 @@ class MultiScenarioHighwayEnv(gym.Env):
         else:
             obs, info = self.current_env.reset(options=options)
 
-        # Tag scenario and aggressiveness in info for logging
-        info = info or {}
-        info["scenario"] = env_id
-        info["aggressiveness"] = self.aggressiveness
+        # Make some background cars antagonistic
+        self._inject_antagonistic_vehicles()
+
         return obs, info
+
+    def _inject_antagonistic_vehicles(self):
+        """
+        Turn a fraction of background cars into 'antagonistic' AggressiveVehicles.
+
+        - Fraction scales with self.aggressiveness (0..1)
+        - Max fraction is 50% of non-ego vehicles
+        - These AggressiveVehicles are drawn yellow and have more assertive behaviour
+        """
+        if self.current_env is None or self.aggressiveness <= 0.0:
+            return
+
+        # 0.0 → 0%, 1.0 → 30% antagonistic
+        max_fraction = 0.30
+        frac = max_fraction * float(self.aggressiveness)
+
+        base_env = self.current_env.unwrapped
+        road = base_env.road
+        ego = base_env.vehicle
+
+        # All non-ego vehicles currently on the road
+        others = [v for v in road.vehicles if v is not ego]
+        n = len(others)
+        if n == 0 or frac <= 0.0:
+            return
+
+        n_ant = max(1, int(n * frac))
+
+        # Pick the cars closest to the ego vehicle to make them antagonistic
+        def dist_to_ego(v):
+            try:
+                return abs(v.lane_distance_to(ego))
+            except Exception:
+                return float("inf")
+
+        others_sorted = sorted(others, key=dist_to_ego)
+        antagonists = set(others_sorted[:n_ant])
+
+        new_list = []
+        for v in road.vehicles:
+            if v is ego:
+                new_list.append(v)
+                continue
+
+            if v in antagonists:
+                # Replace with a more aggressive behaviour vehicle,
+                # keeping approximately the same state.
+                target_lane = getattr(v, "target_lane_index", getattr(v, "lane_index", None))
+                target_speed = getattr(v, "target_speed", v.speed * 1.2)
+
+                ag = AggressiveVehicle(
+                    road=road,
+                    position=v.position,
+                    heading=v.heading,
+                    speed=v.speed,
+                    target_lane_index=target_lane,
+                    target_speed=target_speed,
+                    # route=getattr(v, "route", None),
+                    enable_lane_change=True,
+                    timer=getattr(v, "timer", None),
+                )
+
+                # mark as antagonist so we can steer it towards the ego later
+                ag.is_antagonist = True
+
+                # push them a bit "towards" the ego by increasing target_speed
+                ag.target_speed = max(
+                    getattr(ego, "target_speed", getattr(ego, "speed", 0.0) + 5.0),
+                    ag.target_speed,
+                )
+
+                new_list.append(ag)
+            else:
+                new_list.append(v)
+
+        road.vehicles = new_list
+
+    def _update_antagonists_targets(self) -> None:
+        """
+        On each step, adjust antagonistic vehicles so they more directly
+        'target' the ego:
+          - aggressively try to get into the ego's lane
+          - go noticeably faster than the ego, especially when behind
+        """
+        if self.current_env is None:
+            return
+
+        base_env = self.current_env.unwrapped
+        road = getattr(base_env, "road", None)
+        if road is None:
+            return
+
+        # Find ego vehicle
+        ego = getattr(base_env, "vehicle", None)
+        if ego is None:
+            controlled = getattr(base_env, "controlled_vehicles", [])
+            ego = controlled[0] if controlled else None
+        if ego is None:
+            return
+
+        ego_lane = getattr(ego, "lane_index", None)
+        ego_speed = getattr(ego, "speed", 0.0)
+        ex, ey = getattr(ego, "position", (0.0, 0.0))
+
+        for v in getattr(road, "vehicles", []):
+            if not getattr(v, "is_antagonist", False):
+                continue
+
+            vx, vy = getattr(v, "position", (0.0, 0.0))
+
+            # Rough "ahead/behind" check along x-axis
+            longitudinal_delta = ex - vx  # >0 means v is behind ego, <0 means ahead
+
+            # 1) Try to get into the SAME lane as the ego (direct targeting)
+            if ego_lane is not None and hasattr(v, "target_lane_index"):
+                try:
+                    v.target_lane_index = ego_lane
+                except Exception:
+                    pass
+
+            # 2) Chase the ego with higher speed
+            if hasattr(v, "target_speed"):
+                base_offset = 6.0  # a bit more than ego
+
+                if longitudinal_delta > 20.0:      # far behind
+                    chase_offset = base_offset + 6.0   # ego + 12
+                elif longitudinal_delta > 5.0:    # somewhat behind
+                    chase_offset = base_offset + 3.0   # ego + 9
+                else:
+                    chase_offset = base_offset        # ego + 6
+
+                desired = ego_speed + chase_offset
+
+                try:
+                    v.target_speed = max(desired, getattr(v, "target_speed", 0.0))
+                except Exception:
+                    v.target_speed = desired
 
 
     def step(self, action):
         """Step through the current selected scenario."""
         assert self.current_env is not None, "Call reset() before step()."
+
+        self._update_antagonists_targets()
+
         obs, reward, terminated, truncated, info = self.current_env.step(action)
         info = info or {}
         info["scenario"] = self.current_env_id
