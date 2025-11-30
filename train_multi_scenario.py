@@ -3,10 +3,10 @@
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import BaseCallback
 
 from multi_scenario_env import MultiScenarioHighwayEnv
 
+from multi_wandb_helpers import make_wandb_and_curriculum_callbacks
 
 def make_multi_env():
     """
@@ -26,56 +26,9 @@ def make_multi_env():
     )
     return Monitor(env)
 
-
-class AggressionCurriculumCallback(BaseCallback):
-    """
-    Callback that gradually increases env aggressiveness over training.
-    We call env.set_curriculum_progress(progress) where progress ∈ [0, 1].
-    """
-
-    def __init__(self, total_timesteps: int, verbose: int = 0):
-        super().__init__(verbose)
-        self.total_timesteps = total_timesteps
-
-    def _on_step(self) -> bool:
-        # Fraction of training completed in [0, 1]
-        progress = self.num_timesteps / float(self.total_timesteps)
-
-        # Example schedule:
-        #  0–10%: 0.0 → 0.2
-        # 10–50%: 0.2 → 0.7
-        # 50–100%: 0.7 → 1.0
-        if progress < 0.1:
-            target_aggr = 0.2 * (progress / 0.1)
-        elif progress < 0.5:
-            target_aggr = 0.2 + 0.5 * ((progress - 0.1) / 0.4)
-        else:
-            target_aggr = 0.7 + 0.3 * ((progress - 0.5) / 0.5)
-
-        # Update all underlying MultiScenarioHighwayEnv instances
-        # self.training_env is a VecEnv (DummyVecEnv)
-        try:
-            for venv_env in self.training_env.envs:
-                # venv_env is Monitor(MultiScenarioHighwayEnv)
-                base_env = getattr(venv_env, "env", venv_env)
-                if hasattr(base_env, "set_curriculum_progress"):
-                    base_env.set_curriculum_progress(target_aggr)
-        except Exception:
-            # If something goes weird, don't crash training
-            pass
-
-        if self.verbose > 0 and self.num_timesteps % 5000 == 0:
-            print(
-                f"[Curriculum] steps={self.num_timesteps} "
-                f"progress={progress:.2f} aggressiveness={target_aggr:.2f}"
-            )
-
-        return True
-
-
 def main(
-    total_timesteps: int = 750_000,
-    model_path: str = "outputs/models/multi_scenario_lidar_ppo_750k.zip",
+    total_timesteps: int = 25_000,
+    model_path: str = "outputs/models/multi_scenario_lidar_ppo_25k.zip",
 ):
     # 4 parallel copies of the multi-scenario env
     env = DummyVecEnv([make_multi_env for _ in range(4)])
@@ -93,13 +46,15 @@ def main(
         tensorboard_log="./tb_multi_scenario/",
     )
 
-    # Curriculum callback to ramp traffic aggressiveness
-    callback = AggressionCurriculumCallback(
+    # Combined curriculum + W&B logging callbacks from helper file
+    callbacks = make_wandb_and_curriculum_callbacks(
         total_timesteps=total_timesteps,
+        project="multi-scenario-training",
+        run_name=f"multi-lidar-{total_timesteps//1000}k",
         verbose=1,
     )
 
-    model.learn(total_timesteps=total_timesteps, callback=callback)
+    model.learn(total_timesteps=total_timesteps, callback=callbacks)
     model.save(model_path)
     env.close()
 
