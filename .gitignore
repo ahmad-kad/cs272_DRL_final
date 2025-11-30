@@ -105,8 +105,6 @@ tensorboard/
 wandb/
 lightning_logs/
 mlruns/
-tb_mutli_scenario/
-tb_merge_v0/
 
 # Temporary files
 *.tmp
@@ -124,3 +122,4 @@ highway_distillation/outputs/
 *.monitor.csv
 plots/
 /tb_multi_scenario
+/tb_merge_v0
