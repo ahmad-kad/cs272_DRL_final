@@ -43,7 +43,7 @@ def main(
         n_steps=2048,
         batch_size=128,
         gamma=0.95,
-        tensorboard_log="./tb_multi_scenario/",
+        tensorboard_log="./logs/tb_multi_scenario/",
     )
 
     # Combined curriculum + W&B logging callbacks from helper file

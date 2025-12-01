@@ -134,7 +134,7 @@ def main():
         n_steps=2048,
         batch_size=128,
         gamma=0.95,
-        tensorboard_log=f"./tb_{env_id}_{obs_type}/",
+        tensorboard_log=f"./logs/tb_{env_id}_{obs_type}/",
     )
 
     # W&B callback (optional)
