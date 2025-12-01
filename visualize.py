@@ -103,6 +103,13 @@ def parse_args() -> argparse.Namespace:
         default="outputs/visualization",
         help="Directory to save GIFs (default: outputs/visualization)",
     )
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=200,
+        help="Max steps per episode during visualization/GIF (default: 200)",
+    )
+
     return parser.parse_args()
 
 
@@ -132,7 +139,7 @@ def main():
 
         print(f"\n[EPISODE {ep}] Starting...")
 
-        while not (done or truncated):
+        while not (done or truncated) and steps < args.max_steps:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, truncated, info = env.step(action)
             ep_reward += reward
