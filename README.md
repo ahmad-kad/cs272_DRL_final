@@ -11,6 +11,7 @@ root/
 ├── train_multi_scenario.py           # PPO training on the custom multi-scenario environment
 ├── visualize_merge_highway.py        # Render a trained merge-v0 agent
 ├── train_merge_highway.py            # PPO training on merge-v0 with Lidar observations
+├── multi_wandb_helpers.py
 ├── requirements
 ├── README.md
 ├── tb_merge_v0/PPO_1                 # Merge log files
