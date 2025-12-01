@@ -11,7 +11,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from wandb_single_helpers import make_wandb_single_callback
 
-
 # Same mapping as in visualize.py
 ENV_ID_MAP = {
     "highway": "highway-v0",
