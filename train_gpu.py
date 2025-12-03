@@ -56,7 +56,7 @@ def make_env(env_id: str, obs_type: str, render_mode=None):
     # Tweak rewards for intersection for optimization
     if env_id == "intersection-v0":
         config.update({
-            "duration": 15,
+            "duration": 20,
             # harsher on collisions
             "collision_reward": -10.0,        # default ~ -5
             # make reaching the exit really cool
@@ -65,7 +65,7 @@ def make_env(env_id: str, obs_type: str, render_mode=None):
             "high_speed_reward": 0.1,         # default 1.0
             # lower speed range where speed is rewarded
             "reward_speed_range": [2.0, 6.0], # was [7.0, 9.0]
-            "normalize_reward": False,
+            "normalize_reward": True,
         })
 
     env = gym.make(
