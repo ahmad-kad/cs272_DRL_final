@@ -12,13 +12,15 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from wandb_single_helpers import make_wandb_single_callback
 
+from intersection_helpers import IntersectionSafetyWrapper
+
+
 # Same mapping as in visualize.py
 ENV_ID_MAP = {
     "highway": "highway-v0",
     "merge": "merge-v0",
     "intersection": "intersection-v0",
 }
-
 
 def make_observation_config(obs_type: str) -> dict:
     """
@@ -56,16 +58,16 @@ def make_env(env_id: str, obs_type: str, render_mode=None):
     # Tweak rewards for intersection for optimization
     if env_id == "intersection-v0":
         config.update({
-            "duration": 20,
+            "duration": 80,
             # harsher on collisions
-            "collision_reward": -10.0,        # default ~ -5
+            "collision_reward": -1.0,        # default ~ -5
             # make reaching the exit really cool
-            "arrived_reward": 5.0,            # default ~ 1
+            "arrived_reward": 1.0,            # default ~ 1
             # stop over incentivizing max speed
-            "high_speed_reward": 0.1,         # default 1.0
+            "high_speed_reward": 0.5,         # default 1.0
             # lower speed range where speed is rewarded
-            "reward_speed_range": [2.0, 6.0], # was [7.0, 9.0]
-            "normalize_reward": True,
+            "reward_speed_range": [4.5, 6.5], # was [7.0, 9.0]
+            "normalize_reward": False,
         })
 
     env = gym.make(
@@ -74,12 +76,14 @@ def make_env(env_id: str, obs_type: str, render_mode=None):
         config=config,
     )
 
+    if env_id == "intersection-v0":
+        env = IntersectionSafetyWrapper(env)
+
     if render_mode is None:
         # For training: wrap in Monitor so infos contain 'episode'
         env = Monitor(env)
 
     return env
-
 
 def make_env_thunk(env_id: str, obs_type: str, render_mode=None):
     """
