@@ -27,8 +27,8 @@ def make_multi_env():
     return Monitor(env)
 
 def main(
-    total_timesteps: int = 25_000,
-    model_path: str = "outputs/models/multi_scenario_lidar_ppo_25k.zip",
+    total_timesteps: int = 500_000,
+    model_path: str = "outputs/models/multi_scenario_lidar_500k.zip",
 ):
     # 4 parallel copies of the multi-scenario env
     env = DummyVecEnv([make_multi_env for _ in range(4)])

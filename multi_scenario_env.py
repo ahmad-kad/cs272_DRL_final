@@ -9,6 +9,9 @@ from gymnasium import spaces
 
 from highway_env.vehicle.behavior import AggressiveVehicle
 
+from intersection_helpers import IntersectionSafetyWrapper
+
+
 class MultiScenarioHighwayEnv(gym.Env):
     """
     Custom environment that randomly switches between:
@@ -68,9 +71,15 @@ class MultiScenarioHighwayEnv(gym.Env):
                 "policy_frequency": 5,
                 # We'll override vehicles_count etc. *per reset* based on aggressiveness
             }
+            
             env = gym.make(eid, config=base_config, render_mode=self.render_mode)
             if seed is not None:
                 env.reset(seed=seed)
+
+            # Only intersection-v0 gets the safety/reward shaping wrapper
+            if eid == "intersection-v0":
+                env = IntersectionSafetyWrapper(env)
+
             self._envs[eid] = env
 
         # Assume all scenarios share the same obs/action spaces (true for default configs)
