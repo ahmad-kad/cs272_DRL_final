@@ -146,11 +146,11 @@ class MultiScenarioHighwayEnv(gym.Env):
 
         # Example: tweak duration per scenario
         if env_id == "highway-v0":
-            cfg["duration"] = 40  # seconds
+            cfg["duration"] = 30  # seconds
         elif env_id == "merge-v0":
-            cfg["duration"] = 35
+            cfg["duration"] = 20
         elif env_id == "intersection-v0":
-            cfg["duration"] = 35
+            cfg["duration"] = 50
 
         return cfg
 
