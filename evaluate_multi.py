@@ -42,11 +42,18 @@ def evaluate_multi_and_violin(
     env = make_multi_eval_env(aggressiveness=aggressiveness)
     model = PPO.load(model_path)
 
+    # overall stats
     returns = []
     lengths = []
 
+    # per-scenario stats
+    scenario_returns = {}
+    scenario_lengths = {}
+
     for ep in tqdm(range(n_episodes), desc="Evaluating multi-scenario custom env"):
         obs, info = env.reset()
+        scenario = info.get("scenario", "unknown")  # <- which env this episode uses
+
         done = False
         truncated = False
         ep_ret = 0.0
@@ -58,8 +65,16 @@ def evaluate_multi_and_violin(
             ep_ret += reward
             ep_len += 1
 
+        # overall
         returns.append(ep_ret)
         lengths.append(ep_len)
+
+        # per-scenario
+        if scenario not in scenario_returns:
+            scenario_returns[scenario] = []
+            scenario_lengths[scenario] = []
+        scenario_returns[scenario].append(ep_ret)
+        scenario_lengths[scenario].append(ep_len)
 
     env.close()
 
@@ -74,22 +89,37 @@ def evaluate_multi_and_violin(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Violin plot of overall performance on the custom env
-    fig, ax = plt.subplots(figsize=(4, 4))
-    ax.violinplot(returns, showmeans=True, showmedians=True)
-    ax.set_title(f"Custom multi-scenario – Lidar (n={n_episodes})")
-    ax.set_ylabel("Episode return")
-    ax.set_xticks([1])
-    ax.set_xticklabels(["return"])
+    # ---- plotting: overall + per-scenario violins ----
+    scenarios = sorted(scenario_returns.keys())
+    n_plots = 1 + len(scenarios)  # overall + each env
+
+    fig, axes = plt.subplots(1, n_plots, figsize=(4 * n_plots, 4), sharey=True)
+
+    # 0) overall violin (what you already had)
+    axes[0].violinplot(returns, showmeans=True, showmedians=True)
+    axes[0].set_title(f"All scenarios (n={n_episodes})")
+    axes[0].set_ylabel("Episode return")
+    axes[0].set_xticks([1])
+    axes[0].set_xticklabels(["return"])
+
+    # 1..N) one violin per scenario
+    for i, sc in enumerate(scenarios, start=1):
+        sc_rets = np.array(scenario_returns[sc], dtype=float)
+        axes[i].violinplot(sc_rets, showmeans=True, showmedians=True)
+        axes[i].set_title(f"{sc} (n={len(sc_rets)})")
+        axes[i].set_xticks([1])
+        axes[i].set_xticklabels(["return"])
+
+    fig.suptitle(f"Custom multi-scenario – Lidar (n={n_episodes})", y=1.05)
+    fig.tight_layout()
 
     filename = f"{plot_id}_multi_custom_lidar_violin.png"
     path = os.path.join(out_dir, filename)
-    fig.tight_layout()
     fig.savefig(path, dpi=200)
     plt.close(fig)
 
     print(f"[SAVE] Violin plot saved to {path}")
-
+    
 
 def parse_args():
     p = argparse.ArgumentParser(

@@ -82,3 +82,7 @@ def main(
 
     print(f"[DONE] Trained PPO on multi-scenario env for {total_timesteps} steps.")
     print(f"[SAVE] Model saved to {model_path}")
+
+if __name__ == "__main__":
+    # You can tweak defaults here if you want
+    main()

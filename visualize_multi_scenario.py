@@ -7,9 +7,8 @@ import imageio.v2 as imageio      # <-- for saving GIFs
 from stable_baselines3 import PPO
 from multi_scenario_env import MultiScenarioHighwayEnv
 
-
 def main(
-    model_path: str = "outputs/models/multi_scenario_lidar_ppo_750k.zip",
+    model_path: str = "outputs/models/multi_scenario_lidar_ppo_500k.zip",
     episodes: int = 5,
     delay: float = 0.05,
 ):

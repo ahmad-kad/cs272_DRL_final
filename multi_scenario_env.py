@@ -120,9 +120,9 @@ class MultiScenarioHighwayEnv(gym.Env):
         """
         # Base vehicles per scenario
         base_vehicles = {
-            "highway-v0": 20,
-            "merge-v0": 20,
-            "intersection-v0": 10,
+            "highway-v0": 25,
+            "merge-v0": 22,
+            "intersection-v0": 20,
         }
         base = base_vehicles.get(env_id, 20)
 
@@ -146,11 +146,11 @@ class MultiScenarioHighwayEnv(gym.Env):
 
         # Example: tweak duration per scenario
         if env_id == "highway-v0":
-            cfg["duration"] = 30  # seconds
+            cfg["duration"] = 35  # seconds
         elif env_id == "merge-v0":
-            cfg["duration"] = 20
+            cfg["duration"] = 35
         elif env_id == "intersection-v0":
-            cfg["duration"] = 50
+            cfg["duration"] = 100
 
         return cfg
 
