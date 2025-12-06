@@ -14,7 +14,8 @@
 # ===========================================
 
 # Core RL and Machine Learning Libraries
-stable-baselines3>=2.7.0          # Reinforcement learning algorithms (PPO, etc.)
+stable-baselines3>=2.7.0          # Reinforcement learning algorithms (PPO, SAC, etc.)
+sb3-contrib>=2.7.0                # Additional RL algorithms (TQC, TRPO, etc.)
 torch>=2.6.0                      # PyTorch for neural networks
 torchvision>=0.21.0               # PyTorch computer vision
 
@@ -25,6 +26,7 @@ matplotlib>=3.10.0                # Plotting and visualization
 # Environment and Simulation
 highway-env>=1.10.0               # Highway driving simulation environment
 gymnasium>=1.2.0                  # Standardized RL environments API
+shimmy>=1.3.0                     # Gymnasium compatibility layer for stable-baselines3
 pygame>=2.6.0                     # Graphics and rendering (required by highway-env)
 
 # Scientific Computing and Data Processing

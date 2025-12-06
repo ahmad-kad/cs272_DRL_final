@@ -1,10 +1,10 @@
-# train_crazy_driver_sac.py
+# train_crazy_driver_td3.py
 
 import argparse
 import os
 import torch
 import gymnasium as gym
-from stable_baselines3 import SAC
+from stable_baselines3 import TD3
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -78,7 +78,7 @@ def make_env_thunk(render_mode=None, duration=None):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train SAC on the crazy_driver_env."
+        description="Train TD3 on the crazy_driver_env."
     )
     parser.add_argument(
         "--steps",
@@ -89,8 +89,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n_envs",
         type=int,
-        default=2,  # Reduced for stability with reward wrapper
-        help="Number of parallel envs for training (default: 2)",
+        default=8,  # Increased for faster learning
+        help="Number of parallel envs for training (default: 8)",
     )
     parser.add_argument(
         "--no_wandb",
@@ -100,8 +100,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_name",
         type=str,
-        default="crazy_driver_sac",
-        help="Name for saved model (default: crazy_driver_sac)",
+        default="crazy_driver_td3",
+        help="Name for saved model (default: crazy_driver_td3)",
     )
     parser.add_argument(
         "--adaptive_curriculum",
@@ -125,7 +125,7 @@ def main():
     os.makedirs("outputs/models/checkpoints", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    # Build environment - use DummyVecEnv for SAC (more stable than SubprocVecEnv)
+    # Build environment - use DummyVecEnv for TD3 (more stable than SubprocVecEnv)
     from stable_baselines3.common.vec_env import DummyVecEnv
 
     # Start with curriculum stage 1 duration (30s) if using adaptive curriculum
@@ -138,7 +138,7 @@ def main():
 
     # Apply reward normalization to prevent reward gaming
     # VecNormalize normalizes rewards to mean=0, std=1 to make them comparable
-    env = VecNormalize(env, norm_reward=True, gamma=0.99)
+    env = VecNormalize(env, norm_reward=True, gamma=0.95)  # Lower gamma for TD3 stability
 
     # Force CPU training for stability
     device = "cpu"
@@ -146,32 +146,33 @@ def main():
 
     # Model save path following convention: {env}_{policy}_{step}_{type}
     env_name = "copchase"
-    policy_name = "sac"
+    policy_name = "td3"
     step_name = f"{total_timesteps//1000}k"
     type_name = "safe_navigation"  # Safe navigation through dense traffic
     model_path = f"outputs/models/{env_name}_{policy_name}_{step_name}_{type_name}.zip"
 
-    # SAC configuration with CNN features for better vehicle relationship modeling
-    model = SAC(
+    # TD3 configuration optimized for traffic navigation
+    model = TD3(
         "MlpPolicy",  # Multi-layer perceptron policy with spatial CNN features
         env,
         verbose=1,
-        learning_rate=3e-4,  # Standard learning rate
-        buffer_size=1_500_000,  # Larger buffer for better learning (3x increase)
-        learning_starts=8_000,  # Start learning later with more diverse experiences
-        batch_size=256,  # Larger batch size for better gradients
-        tau=0.01,  # Faster target updates
-        gamma=0.95,  # Lower discounting to encourage longer-term planning
-        train_freq=1,  # Train every step
+        learning_rate=1e-3,  # Higher than SAC for faster convergence
+        buffer_size=2_000_000,  # Large buffer for diverse traffic experiences
+        learning_starts=10_000,  # Start learning later with more exploration
+        batch_size=512,  # Large batches for better gradients
+        tau=0.005,  # Slower target updates for stability
+        gamma=0.95,  # Lower discounting for traffic (near-term focus)
+        train_freq=(1, "step"),  # Train every step
         gradient_steps=1,  # Single gradient step per train call
-        ent_coef='auto_0.15',  # More exploration for complex relationships
-        target_update_interval=2,  # Update targets every 2 steps
-        tensorboard_log="./logs/tb_crazy_driver_sac_safe_navigation/",
+        policy_delay=2,  # TD3: Update policy every 2 critic updates
+        target_policy_noise=0.2,  # Exploration noise for deterministic policy
+        target_noise_clip=0.5,  # Clip noise for stability
+        tensorboard_log="./logs/tb_crazy_driver_td3_safe_navigation/",
         device=device,
         policy_kwargs=dict(
             features_extractor_class=SimpleSpatialExtractor,  # CNN-based spatial features
             features_extractor_kwargs={"features_dim": 256},  # Higher dimensional features
-            net_arch=dict(pi=[128, 128], qf=[128, 128])  # Larger networks for better capacity
+            net_arch=dict(pi=[256, 256], qf=[256, 256])  # Larger networks for better capacity
         )
     )
 
@@ -179,8 +180,8 @@ def main():
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,  # Save every 10k steps for more frequent checkpoints
         save_path="./outputs/models/checkpoints/",
-        name_prefix="sac_safe_navigation_checkpoint",
-        save_replay_buffer=True,  # Save replay buffer for SAC
+        name_prefix="td3_safe_navigation_checkpoint",
+        save_replay_buffer=True,  # Save replay buffer for TD3
         save_vecnormalize=True,   # Save VecNormalize statistics
     )
 
@@ -209,7 +210,7 @@ def main():
             env_id="CopChase-v0",
             obs_type="kinematic",
             project="crazy-driver-baseline",
-            run_name=f"crazy_driver_sac_safe_navigation-{total_timesteps//1000}k",
+            run_name=f"crazy_driver_td3_safe_navigation-{total_timesteps//1000}k",
             verbose=1,
         )
         callbacks = [checkpoint_callback, wandb_callback]
@@ -220,10 +221,10 @@ def main():
     if curriculum_callback is not None:
         callbacks.append(curriculum_callback)
 
-    print(f"[TRAIN] SAC on Crazy Driver environment (Safe Navigation Focus)")
+    print(f"[TRAIN] TD3 on Crazy Driver environment (Safe Navigation Focus)")
     print(f"  Action space: Continuous (acceleration, steering)")
     print(f"  Observation space: Kinematic ({env.observation_space.shape[0]}D)")
-    print(f"  Policy: MLP with CNN spatial features [128, 128] networks")
+    print(f"  Policy: MLP with CNN spatial features [256, 256] networks")
     print(f"  Features: 256D spatial CNN processing (vehicles as spatial grid)")
     print(f"  Navigation focus: Safe distance, traffic awareness, smooth driving")
     print(f"  Traffic handling: Avoid 'walls of cars', maintain safe buffers")
@@ -232,7 +233,8 @@ def main():
         print(f"  Episode duration: Dynamic (30s -> 60s -> 120s -> 180s -> 300s)")
     else:
         print(f"  Episode duration: Fixed 60s (shorter for faster iteration)")
-    print(f"  Buffer: 1.5M experiences, Batch: 256, Learning starts: 8k steps")
+    print(f"  Buffer: 2M experiences, Batch: 512, Learning starts: 10k steps")
+    print(f"  TD3 Features: Policy delay=2, Target noise=0.2, Tau=0.005")
     print(f"  Steps: {total_timesteps}, n_envs: {args.n_envs}, device: {device}")
 
     # Train the model
@@ -244,10 +246,11 @@ def main():
     vec_normalize_path = model_path.replace('.zip', '_vecnormalize.pkl')
     env.save(vec_normalize_path)
     env.close()
-    print(f"[SAVE] SAC+Attention model saved to {model_path}")
+    print(f"[SAVE] TD3+Attention model saved to {model_path}")
     print(f"[SAVE] VecNormalize stats saved to {vec_normalize_path}")
-    print("[DONE] SAC training with safe navigation focus finished.")
+    print("[DONE] TD3 training with safe navigation focus finished.")
 
 
 if __name__ == "__main__":
     main()
+
