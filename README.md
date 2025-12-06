@@ -105,6 +105,65 @@ The enhanced training provides detailed charts showing:
 - Speed adaptation across different traffic conditions
 - Lane change behaviors and learning
 
+## SOTA TQC Training with Ego-Attention (CopChase-v0)
+
+For the challenging CopChase-v0 environment with aggressive traffic and police pursuit, we implement the **state-of-the-art TQC algorithm with Ego-Attention**:
+
+### Key Features
+- **TQC Algorithm**: Truncated Quantile Critics - distributional RL that handles crash risks better than PPO/SAC
+- **Ego-Attention Policy**: Attention-based feature extractor focusing on immediate threats
+- **Reward Shaping**: Prevents suicide behavior through clamped penalties, survival bonuses, and direction incentives
+- **Direction Incentive**: Rewards driving within ±22.5° of 22.5° heading (0°-45° range) for angled lane discipline
+- **Resume Training**: Continue training from any checkpoint
+
+### Usage
+```bash
+# Install TQC (recommended for best performance)
+pip install sb3-contrib
+
+# Train with TQC + Ego-Attention (200k steps recommended, memory optimized)
+python train_crazy_driver_tqc.py --steps 200000
+
+# Resume from checkpoint (continues training from saved model)
+python train_crazy_driver_tqc.py --resume_from outputs/models/checkpoints/tqc_ego_attention_checkpoint_80000_steps.zip --steps 120000
+
+# Quick test with single environment
+python train_crazy_driver_tqc.py --steps 1000 --n_envs 1 --no_wandb
+
+# Force SAC instead of TQC
+python train_crazy_driver_tqc.py --use_sac --steps 100000
+
+# Memory-optimized training (recommended for stability)
+python train_crazy_driver_tqc.py --steps 200000 --n_envs 2
+
+# CPU training (for systems without CUDA or GPU memory issues)
+python train_crazy_driver_tqc.py --cpu --steps 100000 --n_envs 1
+```
+
+### Resume Training
+The script supports resuming from any checkpoint saved during training. Checkpoints are automatically saved every 20,000 steps and include:
+- Model weights
+- Replay buffer (for experience replay)
+- VecNormalize statistics (for observation/reward normalization)
+
+### Memory Optimizations
+The training script includes several memory optimizations for stability:
+- **Reduced buffer size**: 250k experiences (50% reduction)
+- **Smaller batch size**: 128 samples (50% reduction)
+- **Limited environments**: Max 2 parallel environments
+- **Periodic CUDA cache clearing**: Every 5000 steps
+- **Tighter observation clipping**: 5.0 for numerical stability
+- **Reduced target update frequency**: Every 2 steps for stability
+
+These optimizations prevent memory fragmentation and CUDA context loss during long training runs. For additional stability, use `--cpu` flag to train on CPU instead of GPU.
+
+Use `--resume_from` to specify a checkpoint path, and `--steps` will be interpreted as additional steps to train.
+
+### Algorithm Comparison
+- **TQC**: Best for highway environments, handles tail risks (crashes) through quantile estimation
+- **SAC**: Strong baseline, good exploration through entropy regularization
+- **PPO**: Stable but conservative, may avoid risky maneuvers needed for high-speed driving
+
 ## Project Structure
 
 ```

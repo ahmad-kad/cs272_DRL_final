@@ -142,6 +142,25 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
         if steering_magnitude > 0.5:  # Large steering changes
             reward -= 0.1 * steering_magnitude
 
+        # ===== 4.5 DIRECTION INCENTIVE (encourage driving at 22.5 degrees) =====
+        heading = env.vehicle.heading
+        # Normalize heading to [-π, π] range
+        heading = ((heading + np.pi) % (2 * np.pi)) - np.pi
+
+        # Target direction: 22.5 degrees (π/8 radians) - slight rightward angle
+        target_heading = np.pi / 8  # 22.5 degrees in radians
+
+        # Calculate angular distance from target direction
+        heading_error = abs(heading - target_heading)
+        # Handle circular nature: minimum angular distance
+        heading_error = min(heading_error, 2 * np.pi - heading_error)
+
+        # Reward being close to 22.5 degrees target (±22.5° tolerance = 0°-45° range), penalize deviation
+        if heading_error < np.pi / 8:  # Within 22.5 degrees of target (±22.5° tolerance)
+            reward += 0.3 * (1.0 - heading_error / (np.pi / 8))  # Up to 0.3 reward
+        elif heading_error > np.pi / 2:  # More than 90 degrees off
+            reward -= 0.2 * min(1.0, (heading_error - np.pi / 2) / (np.pi / 2))  # Penalty up to -0.2
+
         # ===== 5. COLLISION PENALTIES (catastrophic) =====
         if env.vehicle.crashed:
             reward -= 100.0  # Any collision is unacceptable

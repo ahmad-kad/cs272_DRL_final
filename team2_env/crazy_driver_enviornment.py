@@ -330,7 +330,8 @@ class Cop(Vehicle):
         pos: Vector = self.position
         lane = self.lane
 
-        self.position = self.position[0] - distance
+        # Keep position as a vector: (x, y)
+        self.position = np.array([self.position[0] - distance, self.position[1]])
 
         # Enforce a constant rightward heading for cops (0 radians)
         self.heading = 0.0
