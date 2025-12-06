@@ -1,42 +1,45 @@
 # ===========================================
-# Agents Of 272 DRL Driving Project Requirements
+# Autonomous Driving RL Project Requirements
 # ===========================================
 #
 # Installation:
 #   pip install -r requirements.txt
 #
 # Notes:
-#   - PyTorch installation may need to match your CUDA version
+#   - PyTorch installation may vary based on your CUDA version
 #   - highway-env requires pygame for rendering
-#   - stable-baselines3 here is the Gymnasium-compatible version
-#   - imageio is used for saving GIFs from visualize scripts
+#   - stable-baselines3 works with gymnasium (not gym)
+#   - All versions are based on current working setup
 #
 # ===========================================
 
-# Core RL and ML
-stable-baselines3>=2.0.0          # PPO, VecEnv, callbacks, etc.
-torch>=2.0.0                      # PyTorch backend for SB3 policies
-torchvision>=0.15.0               # For CNN policies (grayscale observation)
-
-# Environment and Simulation
-highway-env>=1.8.0                # Highway / merge / intersection driving envs :contentReference[oaicite:0]{index=0}
-gymnasium>=0.29.0                 # Gymnasium API used by SB3 and highway-env :contentReference[oaicite:1]{index=1}
-pygame>=2.5.0                     # Rendering backend required by highway-env
+# Core RL and Machine Learning Libraries
+stable-baselines3>=2.7.0          # Reinforcement learning algorithms (PPO, etc.)
+torch>=2.6.0                      # PyTorch for neural networks
+torchvision>=0.21.0               # PyTorch computer vision
 
 # Experiment Tracking and Visualization
-wandb>=0.16.0                     # Weights & Biases logging (single + multi-scenario helpers) 
-matplotlib>=3.8.0                 # For any plots you make locally
-imageio>=2.34.0                   # Saving GIFs in visualize.py / visualize_multi_scenario.py 
+wandb>=0.22.0                     # Weights & Biases for experiment tracking
+matplotlib>=3.10.0                # Plotting and visualization
 
-# Scientific Computing and Utilities
-numpy>=1.26.0                     # Numerical arrays (also pulled in by torch/SB3)
-tqdm>=4.66.0                      # Progress bars (used by SB3 internally)
-psutil>=5.9.0                     # Optional system monitoring (useful but not required)
+# Environment and Simulation
+highway-env>=1.10.0               # Highway driving simulation environment
+gymnasium>=1.2.0                  # Standardized RL environments API
+pygame>=2.6.0                     # Graphics and rendering (required by highway-env)
 
-# Optional: development / notebooks / extra ML tools
-# pandas>=2.0.0                   # Data analysis / result processing
-# scipy>=1.12.0                   # Extra scientific utilities
-# tensorboard>=2.15.0             # Alternative to W&B for logging
-# jupyter>=1.0.0                  # Notebooks for exploration
-# pytest>=8.0.0                   # Testing framework
-# scikit-learn>=1.3.0             # Extra ML utilities
+# Scientific Computing and Data Processing
+numpy>=2.2.0                      # Numerical computing
+scipy>=1.16.0                     # Scientific computing
+pandas>=2.3.0                     # Data manipulation and analysis
+
+# System and Development Tools
+psutil>=7.1.0                     # System monitoring utilities
+tqdm>=4.67.0                      # Progress bars for training loops
+
+# Testing and Development
+pytest>=8.4.0                     # Testing framework
+
+# Optional: For advanced features (uncomment if needed)
+# tensorboard>=2.15.0              # TensorBoard logging (alternative to wandb)
+# jupyter>=1.0.0                   # Jupyter notebooks for analysis
+# scikit-learn>=1.3.0              # Machine learning utilities

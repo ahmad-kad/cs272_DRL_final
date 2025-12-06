@@ -74,7 +74,15 @@ class crazy_driver_env(AbstractEnv):
     def _reset(self):
         self._create_road()
         self._create_vehicles()
-        self.copy_of_vehicles = copy.deepcopy(self.road.vehicles)
+
+        # Initialize episode tracking
+        self.episode_step = 0
+        self.episode_reward = 0.0
+        self.episode_crashed = False
+        self.episode_success = False
+
+        # Clear rewarded vehicle IDs between episodes to prevent memory leak
+        self.rewarded_vehicle_ids = set()
 
     def _create_road(self):
         road_net = RoadNetwork()
@@ -201,51 +209,70 @@ class crazy_driver_env(AbstractEnv):
         return len(vehicles_to_remove)
 
     def step(self, action):
-
-        if getattr(self, "vehicle", None) is not None:
-            # self.vehicle.speed = 0.0
-            self.vehicle.position = np.array(self.vehicle.position)
-
+        # Remove the unnecessary numpy array creation that could accumulate memory
         obs, reward, terminated, truncated, info = super().step(action)
+
+        # Update episode tracking
+        self.episode_step += 1
+        self.episode_reward += reward
+
+        # Check if crashed
+        if self.vehicle.crashed and not self.episode_crashed:
+            self.episode_crashed = True
 
         removed = self._remove_and_respawn()
         if removed > 0:
             # print(f"  Removed {removed} crashed NPC(s)")
             info["npcs_removed"] = removed
 
+        # Add episode metrics to info when episode ends
+        if terminated or truncated:
+            # Determine success based on survival and positive reward
+            self.episode_success = (not self.episode_crashed) and (self.episode_reward > 0)
+
+            info.update({
+                "episode_step": self.episode_step,
+                "episode_reward": self.episode_reward,
+                "crashed": self.episode_crashed,
+                "speed": self.vehicle.speed if hasattr(self.vehicle, 'speed') else 0.0,
+                "success": self.episode_success,
+            })
+
         return obs, reward, terminated, truncated, info
 
     def _reward(self, action):
+        """
+        Basic reward function for the crazy driver environment.
+        Reward wrapper handles the complex anti-exploitation logic.
+        """
         reward = 0
 
-        # reward for dodging npcs
-        for v in self.copy_of_vehicles:
+        # reward for dodging npcs (close calls)
+        for v in self.road.vehicles:
+            if v == self.vehicle:
+                continue
+
             if (
                 v.speed < 0
                 and 2.0 < np.linalg.norm(self.vehicle.position - v.position) < 5.0
             ):
                 reward += 0.5
-                self.copy_of_vehicles.remove(v)  # no double reward
 
-        # objective: reward for dodging cars as close as possible
-        # constraint: avoid getting hit by the cops
+        # penalty for getting behind cops
         for v in self.road.vehicles:
             if v == self.vehicle:
                 continue
 
-            # penalty so no getting behind cops
             if v.speed > 0 and v.position[0] > self.vehicle.position[0]:
                 reward -= 10
 
-            # penalty for collision with cop
+            # collision penalties
             if v.speed > 0 and self.vehicle.crashed and v.crashed:
                 reward += self.config["collision_cop_reward"]
-
-            # penalty for collision with npc
             elif v.speed < 0 and self.vehicle.crashed and v.crashed:
                 reward += self.config["collision_reward"]
 
-        # penalty for going off road (the more offroad, the higher the penalty)
+        # penalty for going off road
         if not self.vehicle.on_road:
             self.vehicle.MAX_SPEED = self.config["MAX_SPEED"] * 0.7
             reward -= 0.25 * abs(self.vehicle.position[1])
@@ -275,10 +302,20 @@ class crazy_driver_env(AbstractEnv):
         )
         return info
 
+    def close(self):
+        """Clean up resources and break circular references."""
+        if hasattr(self, 'road') and self.road:
+            if hasattr(self.road, 'vehicles'):
+                self.road.vehicles.clear()
+            self.road = None
+        self.vehicle = None
+        if hasattr(self, 'rewarded_vehicle_ids'):
+            self.rewarded_vehicle_ids.clear()
+
 
 gym.register(
     id="CopChase-v0",
-    entry_point="crazy_driver_environment:crazy_driver_env",
+    entry_point="team2_env.crazy_driver_enviornment:crazy_driver_env",
 )
 
 
