@@ -5,8 +5,11 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 
 from multi_scenario_env import MultiScenarioHighwayEnv
-
 from multi_wandb_helpers import make_wandb_and_curriculum_callbacks
+
+import torch as th
+from stable_baselines3.common.vec_env import SubprocVecEnv
+
 
 def make_multi_env():
     """
@@ -27,13 +30,20 @@ def make_multi_env():
     return Monitor(env)
 
 def main(
-    total_timesteps: int = 25_000,
-    model_path: str = "outputs/models/multi_scenario_lidar_ppo_25k.zip",
+    total_timesteps: int = 500_000,
+    model_path: str = "outputs/models/multi_scenario_lidar_500k.zip",
+    n_envs: int = 4,
 ):
-    # 4 parallel copies of the multi-scenario env
-    env = DummyVecEnv([make_multi_env for _ in range(4)])
+    # ----- Device selection (GPU if available) -----
+    device = "cuda" if th.cuda.is_available() else "cpu"
+    print(f"[DEVICE] Using {device}")
 
-    # PPO agent (tuned a bit for highway-style tasks)
+    # ----- Parallel envs (true parallel with subprocesses) -----
+    # We pass a list of callables; each creates its own env instance in a child process
+    env_fns = [make_multi_env for _ in range(n_envs)]
+    env = SubprocVecEnv(env_fns)
+
+    # ----- PPO agent -----
     model = PPO(
         "MlpPolicy",
         env,
@@ -44,9 +54,10 @@ def main(
         batch_size=128,
         gamma=0.95,
         tensorboard_log="./logs/tb_multi_scenario/",
+        device=device,  # <-- send networks to GPU if available
     )
 
-    # Combined curriculum + W&B logging callbacks from helper file
+    # ----- W&B + curriculum callbacks -----
     callbacks = make_wandb_and_curriculum_callbacks(
         total_timesteps=total_timesteps,
         project="multi-scenario-training",
@@ -54,13 +65,24 @@ def main(
         verbose=1,
     )
 
-    model.learn(total_timesteps=total_timesteps, callback=callbacks)
+    print(
+        f"[TRAIN] multi-scenario, obs=lidar, policy=MlpPolicy, "
+        f"steps={total_timesteps}, n_envs={n_envs}"
+    )
+
+    # progress_bar=True gives you the same nice ETA bar as single-scenario training
+    model.learn(
+        total_timesteps=total_timesteps,
+        callback=callbacks,
+        progress_bar=True,
+    )
+
     model.save(model_path)
     env.close()
 
     print(f"[DONE] Trained PPO on multi-scenario env for {total_timesteps} steps.")
     print(f"[SAVE] Model saved to {model_path}")
 
-
 if __name__ == "__main__":
+    # You can tweak defaults here if you want
     main()

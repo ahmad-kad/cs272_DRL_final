@@ -141,8 +141,7 @@ class WandbScenarioCallback(BaseCallback):
         return True
 
     def _on_training_end(self) -> None:
-        # Final summary per scenario
-        summary = {}
+        # Final summary per scenario (no extra time-series)
         for scenario, n_ep in self.scenario_episodes.items():
             if n_ep == 0:
                 continue
@@ -150,11 +149,10 @@ class WandbScenarioCallback(BaseCallback):
             mean_len = self.scenario_lengths[scenario] / n_ep
             success_rate = self.scenario_successes[scenario] / n_ep
 
-            summary[f"{scenario}/mean_return"] = mean_ret
-            summary[f"{scenario}/mean_length"] = mean_len
-            summary[f"{scenario}/success_rate"] = success_rate
+            wandb.run.summary[f"{scenario}/mean_return"] = mean_ret
+            wandb.run.summary[f"{scenario}/mean_length"] = mean_len
+            wandb.run.summary[f"{scenario}/success_rate"] = success_rate
 
-        wandb.log(summary, step=self.num_timesteps)
         wandb.finish()
 
 

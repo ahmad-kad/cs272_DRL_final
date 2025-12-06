@@ -9,6 +9,9 @@ from gymnasium import spaces
 
 from highway_env.vehicle.behavior import AggressiveVehicle
 
+from intersection_helpers import IntersectionSafetyWrapper
+
+
 class MultiScenarioHighwayEnv(gym.Env):
     """
     Custom environment that randomly switches between:
@@ -68,9 +71,15 @@ class MultiScenarioHighwayEnv(gym.Env):
                 "policy_frequency": 5,
                 # We'll override vehicles_count etc. *per reset* based on aggressiveness
             }
+            
             env = gym.make(eid, config=base_config, render_mode=self.render_mode)
             if seed is not None:
                 env.reset(seed=seed)
+
+            # Only intersection-v0 gets the safety/reward shaping wrapper
+            if eid == "intersection-v0":
+                env = IntersectionSafetyWrapper(env)
+
             self._envs[eid] = env
 
         # Assume all scenarios share the same obs/action spaces (true for default configs)
@@ -111,9 +120,9 @@ class MultiScenarioHighwayEnv(gym.Env):
         """
         # Base vehicles per scenario
         base_vehicles = {
-            "highway-v0": 20,
-            "merge-v0": 20,
-            "intersection-v0": 10,
+            "highway-v0": 25,
+            "merge-v0": 22,
+            "intersection-v0": 20,
         }
         base = base_vehicles.get(env_id, 20)
 
@@ -137,11 +146,11 @@ class MultiScenarioHighwayEnv(gym.Env):
 
         # Example: tweak duration per scenario
         if env_id == "highway-v0":
-            cfg["duration"] = 40  # seconds
+            cfg["duration"] = 35  # seconds
         elif env_id == "merge-v0":
             cfg["duration"] = 35
         elif env_id == "intersection-v0":
-            cfg["duration"] = 35
+            cfg["duration"] = 100
 
         return cfg
 
