@@ -144,6 +144,3 @@ python visualize_copchase.py \
 ```
 
 Models and plots are saved under `outputs/` (created automatically); W&B logging can be toggled with the `--no_wandb` flags in the training scripts.
-
-```
-```
