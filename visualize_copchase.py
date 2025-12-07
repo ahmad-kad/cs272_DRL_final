@@ -122,7 +122,10 @@ def main():
         vec_normalize_path = args.model.replace('.zip', '_vecnormalize.pkl')
         if os.path.exists(vec_normalize_path):
             print("[INFO] Loading VecNormalize stats for TQC model (required for proper behavior)")
-            env = VecNormalize.load(vec_normalize_path, env)
+            # Wrap single env in DummyVecEnv for VecNormalize compatibility
+            from stable_baselines3.common.vec_env import DummyVecEnv
+            vec_env = DummyVecEnv([lambda: env])
+            env = VecNormalize.load(vec_normalize_path, vec_env)
             env.training = False  # Set to evaluation mode
             env.norm_reward = False  # Don't normalize rewards during visualization
 
@@ -143,7 +146,11 @@ def main():
     print(f"[ENV] CopChase-v0 environment")
     print(f"[ENV] Action space: {env.action_space}")
     print(f"[ENV] Observation space: {env.observation_space}")
-    config = env.unwrapped.config
+    # Access config from the underlying environment
+    if hasattr(env, 'venv'):  # VecNormalize wrapper
+        config = env.venv.envs[0].unwrapped.config
+    else:  # Direct environment
+        config = env.unwrapped.config
     print(f"[ENV] Duration: {config['duration']} seconds")
     print(f"[ENV] Vehicles: {config['vehicles_count']} NPCs + {config['cop_count']} cops")
 
@@ -157,7 +164,14 @@ def main():
     crash_count = 0
 
     for ep in range(1, args.episodes + 1):
-        obs, info = env.reset()
+        obs = env.reset()
+        # VecNormalize returns arrays, extract first element for single env
+        if isinstance(obs, tuple):
+            obs, info = obs
+        else:
+            obs = obs[0] if hasattr(obs, '__len__') and len(obs) > 0 else obs
+            info = {}  # Default info for VecNormalize
+
         done = False
         truncated = False
         ep_reward = 0.0
@@ -169,11 +183,32 @@ def main():
         while not (done or truncated) and steps < args.max_steps:
             if use_model:
                 action, _ = model.predict(obs, deterministic=True)
+                # VecNormalize expects actions as arrays, ensure proper shape
+                if hasattr(env, 'venv'):  # VecNormalize wrapper
+                    action = [action]  # Wrap single action in list for vec env
             else:
                 # Random action: sample from action space
                 action = env.action_space.sample()
+                if hasattr(env, 'venv'):  # VecNormalize wrapper
+                    action = [action]  # Wrap single action in list for vec env
 
-            obs, reward, done, truncated, info = env.step(action)
+            step_result = env.step(action)
+            # VecNormalize returns different format than base env
+            if len(step_result) == 5:
+                obs, reward, done, truncated, info = step_result
+            else:
+                # VecNormalize might return different format
+                obs, reward, done, info = step_result
+                truncated = False  # Assume no truncation for older gym versions
+
+            # VecNormalize returns arrays, extract first element for single env
+            obs = obs[0] if hasattr(obs, '__len__') and len(obs) > 0 else obs
+            reward = reward[0] if hasattr(reward, '__len__') and len(reward) > 0 else reward
+            done = done[0] if hasattr(done, '__len__') and len(done) > 0 else done
+            if isinstance(truncated, (list, tuple, np.ndarray)) and len(truncated) > 0:
+                truncated = truncated[0]
+            info = info[0] if hasattr(info, '__len__') and len(info) > 0 else info
+
             ep_reward += reward
             steps += 1
 
@@ -185,7 +220,7 @@ def main():
                 time.sleep(args.delay)
             # For "none" mode, skip rendering entirely
 
-        crashed = info.get('crashed', False)
+        crashed = info.get('crashed', False) if isinstance(info, dict) else False
         print(f"Episode {ep}: steps={steps}, reward={ep_reward:.2f}, crashed={crashed}")
 
         # Collect statistics

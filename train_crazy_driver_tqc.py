@@ -80,9 +80,6 @@ def make_env(render_mode=None, duration=None):
         config=config,
     )
 
-    # Apply reward wrapper to prevent crash exploitation (suicide bug)
-    env = CrazyDriverRewardWrapper.create_for_sac_td3(env)
-
     if render_mode is None:
         # For training: wrap in Monitor so infos contain 'episode'
         env = Monitor(env)
@@ -536,13 +533,13 @@ def run_single_epoch(args, epoch_num=None, shared_wandb_callback=None):
         from stable_baselines3.common.vec_env import DummyVecEnv
         env = DummyVecEnv([make_env_thunk(render_mode=None, duration=60) for _ in range(n_envs_to_use)])
 
-    env = VecNormalize(
-        env,
-        norm_obs=True,
-        norm_reward=True,
-        clip_obs=5.0,
-        gamma=0.98
-    )
+        env = VecNormalize(
+            env,
+            norm_obs=True,
+            norm_reward=True,
+            clip_obs=5.0,
+            gamma=0.98
+        )
 
     # Device selection
     if args.cpu:

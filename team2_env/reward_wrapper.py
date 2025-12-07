@@ -57,6 +57,7 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
         }
 
         self.reward_config = {**default_config, **(reward_config or {})}
+        self.reward_mode = getattr(self, 'reward_mode', 'survival')  # Default to survival mode
 
         # Track episode state for completion bonuses
         self.episode_start_time = 0
@@ -97,6 +98,13 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
         return obs, corrected_reward, terminated, truncated, info
 
     def _calculate_corrected_reward(self, action):
+        """Reward calculation based on mode: survival or crazy_driver."""
+        if self.reward_mode == "crazy_driver":
+            return self._calculate_crazy_driver_reward(action)
+        else:
+            return self._calculate_survival_reward(action)
+
+    def _calculate_survival_reward(self, action):
         """Reward safe navigation through dense traffic."""
         reward = 0
         env = self.base_env
@@ -186,6 +194,77 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
 
         return reward
 
+    def _calculate_crazy_driver_reward(self, action):
+        """Reward crazy driving: speed, right-heading, minimal off-road penalties."""
+        reward = 0
+        env = self.base_env
+
+        # ===== 1. SPEED INCENTIVE (primary objective - go fast!) =====
+        speed = env.vehicle.speed
+        if speed > 25:  # Very high speed
+            reward += 2.0 * (speed / 30.0)  # Up to 2.0 reward at max speed
+        elif speed > 20:  # Good speed
+            reward += 1.0 * (speed / 25.0)  # Up to 1.0 reward
+        elif speed > 15:  # Acceptable speed
+            reward += 0.5 * (speed / 20.0)  # Up to 0.5 reward
+        else:  # Too slow
+            reward -= 0.5  # Small penalty for being too cautious
+
+        # ===== 2. RIGHT-HEADING INCENTIVE (strong preference for positive X direction) =====
+        heading = env.vehicle.heading
+        # Normalize heading to [-π, π] range
+        heading = ((heading + np.pi) % (2 * np.pi)) - np.pi
+
+        # Target: strongly incentivize positive X direction (0-45 degrees)
+        if heading > 0 and heading < np.pi / 4:  # 0 to 45 degrees (rightward)
+            reward += 1.5 * (heading / (np.pi / 4))  # Up to 1.5 reward for heading right
+        elif heading < 0 and heading > -np.pi / 4:  # -45 to 0 degrees (slight left)
+            reward += 0.5 * (1.0 - abs(heading) / (np.pi / 4))  # Smaller reward for slight left
+        else:  # Heading backward or sharply left
+            reward -= 0.5  # Penalty for wrong direction
+
+        # ===== 3. SURVIVAL BONUS (still important, but not primary) =====
+        reward += 0.2  # Base survival reward
+
+        # ===== 4. SAFE DISTANCE (avoid immediate collisions) =====
+        min_distance = float('inf')
+        for v in env.road.vehicles:
+            if v == env.vehicle:
+                continue
+            distance = np.linalg.norm(np.array(env.vehicle.position) - np.array(v.position))
+            min_distance = min(min_distance, distance)
+
+        # Only penalize extremely close vehicles
+        if min_distance < 2.0:
+            reward -= 2.0  # Harsh penalty for imminent collision
+        elif min_distance < 4.0:
+            reward -= 0.5  # Moderate penalty for close calls
+
+        # ===== 5. OFF-ROAD HANDLING (minimal penalties - allow exploration) =====
+        if not env.vehicle.on_road:
+            self.offroad_timer += 1
+            # Much smaller penalty - just discourage prolonged off-road behavior
+            reward -= 0.1 * min(self.offroad_timer, 5)  # Max -0.5 penalty
+
+            # Don't terminate for off-road - let agent explore
+            if self.offroad_timer >= 50:  # Much higher threshold
+                env.vehicle.crashed = True
+                reward -= 10.0
+        else:
+            self.offroad_timer = 0
+
+        # ===== 6. CRASH PENALTIES (still catastrophic) =====
+        if env.vehicle.crashed:
+            reward -= 100.0  # Any collision is still very bad
+            return reward
+
+        # ===== 7. SMOOTH DRIVING BONUS =====
+        steering_magnitude = abs(action[1]) if len(action) > 1 else 0
+        if steering_magnitude < 0.3:  # Gentle steering
+            reward += 0.1  # Small bonus for smooth control
+
+        return reward
+
     def get_reward_config(self) -> Dict[str, float]:
         """Get current reward configuration."""
         return copy.deepcopy(self.reward_config)
@@ -234,6 +313,13 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
         }
         return cls(env, config)
 
+    @classmethod
+    def create_for_crazy_driver(cls, env):
+        """Create wrapper optimized for crazy driver behavior: speed + right-heading, minimal off-road penalties."""
+        wrapper = cls(env)
+        wrapper.reward_mode = "crazy_driver"
+        return wrapper
+
 
 def create_wrapped_crazy_driver_env(algorithm: str = "tqc", episode_duration: int = 120):
     """
@@ -261,12 +347,14 @@ def create_wrapped_crazy_driver_env(algorithm: str = "tqc", episode_duration: in
     env = gym.make("CopChase-v0", config=config)
 
     # Apply algorithm-specific reward wrapper
-    if algorithm.lower() == "tqc":
+    if algorithm.lower() == "crazy":
+        wrapped_env = CrazyDriverRewardWrapper.create_for_crazy_driver(env)  # Crazy driver behavior
+    elif algorithm.lower() == "tqc":
         wrapped_env = CrazyDriverRewardWrapper.create_for_sac_td3(env)  # TQC uses same config as SAC/TD3
     elif algorithm.lower() == "ppo":
         wrapped_env = CrazyDriverRewardWrapper.create_for_ppo_attention(env)
     else:
-        # Default to TQC configuration
-        wrapped_env = CrazyDriverRewardWrapper.create_for_sac_td3(env)
+        # Default to crazy driver configuration
+        wrapped_env = CrazyDriverRewardWrapper.create_for_crazy_driver(env)
 
     return wrapped_env
