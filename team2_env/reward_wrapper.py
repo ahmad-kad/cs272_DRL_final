@@ -234,29 +234,13 @@ class CrazyDriverRewardWrapper(gym.Wrapper):
         }
         return cls(env, config)
 
-    @classmethod
-    def create_for_i2a(cls, env):
-        """Create wrapper optimized for I2A."""
-        config = {
-            "survival_bonus": 0.08,
-            "completion_bonus": 0.8,
-            "speed_reward": 0.2,
-            "near_miss_reward": 0.4,
-            "cop_avoidance_penalty": 0.4,
-            "cop_behind_penalty": 1.8,
-            "cop_crash_penalty": 80.0,
-            "npc_crash_penalty": 40.0,
-            "offroad_penalty": 0.25,
-        }
-        return cls(env, config)
 
-
-def create_wrapped_crazy_driver_env(algorithm: str = "sac", episode_duration: int = 120):
+def create_wrapped_crazy_driver_env(algorithm: str = "tqc", episode_duration: int = 120):
     """
     Factory function to create a properly configured crazy_driver_env with reward wrapper.
 
     Args:
-        algorithm: Which algorithm to optimize for ("sac", "td3", "ppo", "i2a")
+        algorithm: Which algorithm to optimize for ("tqc", "ppo")
         episode_duration: Episode length in seconds (default 120 for longer training)
 
     Returns:
@@ -277,14 +261,12 @@ def create_wrapped_crazy_driver_env(algorithm: str = "sac", episode_duration: in
     env = gym.make("CopChase-v0", config=config)
 
     # Apply algorithm-specific reward wrapper
-    if algorithm.lower() in ["sac", "td3"]:
-        wrapped_env = CrazyDriverRewardWrapper.create_for_sac_td3(env)
+    if algorithm.lower() == "tqc":
+        wrapped_env = CrazyDriverRewardWrapper.create_for_sac_td3(env)  # TQC uses same config as SAC/TD3
     elif algorithm.lower() == "ppo":
         wrapped_env = CrazyDriverRewardWrapper.create_for_ppo_attention(env)
-    elif algorithm.lower() == "i2a":
-        wrapped_env = CrazyDriverRewardWrapper.create_for_i2a(env)
     else:
-        # Default to SAC/TD3 configuration
+        # Default to TQC configuration
         wrapped_env = CrazyDriverRewardWrapper.create_for_sac_td3(env)
 
     return wrapped_env

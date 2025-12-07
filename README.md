@@ -110,7 +110,7 @@ The enhanced training provides detailed charts showing:
 For the challenging CopChase-v0 environment with aggressive traffic and police pursuit, we implement the **state-of-the-art TQC algorithm with Ego-Attention**:
 
 ### Key Features
-- **TQC Algorithm**: Truncated Quantile Critics - distributional RL that handles crash risks better than PPO/SAC
+- **TQC Algorithm**: Truncated Quantile Critics - distributional RL that handles crash risks
 - **Ego-Attention Policy**: Attention-based feature extractor focusing on immediate threats
 - **Reward Shaping**: Prevents suicide behavior through clamped penalties, survival bonuses, and direction incentives
 - **Direction Incentive**: Rewards driving within ±22.5° of 22.5° heading (0°-45° range) for angled lane discipline
@@ -130,18 +130,19 @@ python train_crazy_driver_tqc.py --resume_from outputs/models/checkpoints/tqc_eg
 # Quick test with single environment
 python train_crazy_driver_tqc.py --steps 1000 --n_envs 1 --no_wandb
 
-# Force SAC instead of TQC
-python train_crazy_driver_tqc.py --use_sac --steps 100000
-
 # Memory-optimized training (recommended for stability)
 python train_crazy_driver_tqc.py --steps 200000 --n_envs 2
 
 # CPU training (for systems without CUDA or GPU memory issues)
 python train_crazy_driver_tqc.py --cpu --steps 100000 --n_envs 1
+
+# Epoch training (split into smaller chunks for maximum stability)
+python train_crazy_driver_tqc.py --epochs 20 --epoch_steps 10000  # 20 epochs of 10k steps each
+python train_crazy_driver_tqc.py --epochs 10 --steps 200000      # 10 epochs from 200k total steps
 ```
 
 ### Resume Training
-The script supports resuming from any checkpoint saved during training. Checkpoints are automatically saved every 20,000 steps and include:
+The script supports resuming from any checkpoint saved during training. Checkpoints are automatically saved every 10,000 steps and include:
 - Model weights
 - Replay buffer (for experience replay)
 - VecNormalize statistics (for observation/reward normalization)
@@ -157,11 +158,30 @@ The training script includes several memory optimizations for stability:
 
 These optimizations prevent memory fragmentation and CUDA context loss during long training runs. For additional stability, use `--cpu` flag to train on CPU instead of GPU.
 
+### Epoch Training (Maximum Stability)
+For ultra-long training runs, use epoch training to split training into smaller chunks with memory clearing between each epoch:
+
+**Benefits:**
+- **Memory Reset**: Complete memory cleanup between epochs
+- **Fault Tolerance**: If one epoch crashes, others can continue
+- **Progress Preservation**: Automatic checkpointing between epochs
+- **Resource Management**: Prevents long-term memory leaks
+
+**Usage:**
+```bash
+# Train 1M steps in 50 epochs of 20k steps each
+python train_crazy_driver_tqc.py --epochs 50 --epoch_steps 20000
+
+# Resume epoch training from checkpoint
+python train_crazy_driver_tqc.py --epochs 30 --epoch_steps 20000 --resume_from checkpoint.zip
+```
+
+Each epoch saves checkpoints and clears memory, ensuring maximum stability for overnight/weekend training runs.
+
 Use `--resume_from` to specify a checkpoint path, and `--steps` will be interpreted as additional steps to train.
 
 ### Algorithm Comparison
 - **TQC**: Best for highway environments, handles tail risks (crashes) through quantile estimation
-- **SAC**: Strong baseline, good exploration through entropy regularization
 - **PPO**: Stable but conservative, may avoid risky maneuvers needed for high-speed driving
 
 ## Project Structure

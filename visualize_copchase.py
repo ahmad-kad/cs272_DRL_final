@@ -3,12 +3,21 @@
 import argparse
 import os
 import time
+import statistics
 
 import gymnasium as gym
 import imageio.v2 as imageio
-from stable_baselines3 import PPO, SAC
-from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
+from stable_baselines3.common.vec_env import VecNormalize
 import numpy as np
+
+# Optional imports for plotting
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
+    print("[WARNING] matplotlib/seaborn not available, violin plots disabled")
 
 # Try to import TQC
 try:
@@ -50,12 +59,12 @@ def make_env(render_mode: str = "rgb_array"):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Visualize the CopChase environment (crazy driver scenario) with PPO/SAC/TQC models."
+        description="Visualize the CopChase environment (crazy driver scenario) with TQC models."
     )
     parser.add_argument(
         "--model",
         type=str,
-        help="Path to a trained model .zip file (PPO/SAC/TQC supported, optional - if not provided, uses random actions)",
+        help="Path to a trained TQC model .zip file (optional - if not provided, uses random actions)",
     )
     parser.add_argument(
         "--episodes",
@@ -93,6 +102,11 @@ def parse_args() -> argparse.Namespace:
         default="rgb_array",
         help="Render mode: 'human' for live window, 'rgb_array' for GIFs, 'none' for no rendering (default: rgb_array)",
     )
+    parser.add_argument(
+        "--evaluate_stats",
+        action="store_true",
+        help="Run evaluation and output statistics (success rate, reward, length) for analysis",
+    )
 
     return parser.parse_args()
 
@@ -103,33 +117,23 @@ def main():
     # Create environment
     env = make_env(render_mode=args.render_mode)
 
-    # For visualization, we skip VecNormalize as it's mainly for training stability
-    # and can cause issues with rendering. The agent behavior will still be visible.
-    use_vec_normalize = False
-    if args.model and os.path.exists(args.model.replace('.zip', '_vecnormalize.pkl')):
-        print("[INFO] VecNormalize stats available but skipped for visualization compatibility")
+    # Load VecNormalize for TQC models (they need normalization for proper behavior)
+    if args.model:
+        vec_normalize_path = args.model.replace('.zip', '_vecnormalize.pkl')
+        if os.path.exists(vec_normalize_path):
+            print("[INFO] Loading VecNormalize stats for TQC model (required for proper behavior)")
+            env = VecNormalize.load(vec_normalize_path, env)
+            env.training = False  # Set to evaluation mode
+            env.norm_reward = False  # Don't normalize rewards during visualization
 
     # Load model if provided, otherwise use random actions
     if args.model:
-        # Auto-detect model type from filename
-        model_path_lower = args.model.lower()
+        if not TQC_AVAILABLE:
+            raise ImportError("TQC not available - install sb3-contrib")
 
-        # Detect model type
-        if 'tqc' in model_path_lower and TQC_AVAILABLE:
-            model_class = TQC
-            model_type = "TQC"
-        elif 'sac' in model_path_lower:
-            model_class = SAC
-            model_type = "SAC"
-        else:
-            # Default to PPO for backward compatibility
-            model_class = PPO
-            model_type = "PPO"
-
-        # Load the model without VecNormalize (we handle normalization separately)
-        model = model_class.load(args.model)
-
-        print(f"[LOAD] {model_type} model loaded from {args.model}")
+        # Load TQC model
+        model = TQC.load(args.model)
+        print(f"[LOAD] TQC model loaded from {args.model}")
         use_model = True
     else:
         model = None
@@ -145,6 +149,12 @@ def main():
 
     if args.save_gif:
         os.makedirs(args.gif_dir, exist_ok=True)
+
+    # Statistics collection for evaluation
+    episode_rewards = []
+    episode_lengths = []
+    success_count = 0
+    crash_count = 0
 
     for ep in range(1, args.episodes + 1):
         obs, info = env.reset()
@@ -175,7 +185,16 @@ def main():
                 time.sleep(args.delay)
             # For "none" mode, skip rendering entirely
 
-        print(f"Episode {ep}: steps={steps}, reward={ep_reward:.2f}, crashed={info.get('crashed', False)}")
+        crashed = info.get('crashed', False)
+        print(f"Episode {ep}: steps={steps}, reward={ep_reward:.2f}, crashed={crashed}")
+
+        # Collect statistics
+        episode_rewards.append(ep_reward)
+        episode_lengths.append(steps)
+        if crashed:
+            crash_count += 1
+        else:
+            success_count += 1
 
         if args.save_gif and args.render_mode == "rgb_array" and frames:
             if use_model:
@@ -190,6 +209,68 @@ def main():
             print(f"[GIF] Saved {gif_path}")
 
     env.close()
+
+    # Output evaluation statistics
+    if args.evaluate_stats and args.episodes > 1:
+        print("\n" + "="*60)
+        print("EVALUATION STATISTICS")
+        print("="*60)
+
+        success_rate = success_count / args.episodes
+        crash_rate = crash_count / args.episodes
+
+        avg_reward = statistics.mean(episode_rewards)
+        reward_std = statistics.stdev(episode_rewards) if len(episode_rewards) > 1 else 0
+
+        avg_length = statistics.mean(episode_lengths)
+        length_std = statistics.stdev(episode_lengths) if len(episode_lengths) > 1 else 0
+
+        print(f"Model: {args.model.split('/')[-1] if args.model else 'Random'}")
+        print(f"Episodes evaluated: {args.episodes}")
+        print()
+        print("SUCCESS METRICS:")
+        print(f"  Success rate: {success_rate:.3f} ({success_count}/{args.episodes})")
+        print(f"  Crash rate: {crash_rate:.3f} ({crash_count}/{args.episodes})")
+        print()
+        print("REWARD STATISTICS:")
+        print(f"  Average reward: {avg_reward:.2f} ± {reward_std:.2f}")
+        print(f"  Reward range: {min(episode_rewards):.2f} to {max(episode_rewards):.2f}")
+        print()
+        print("EPISODE LENGTH STATISTICS:")
+        print(f"  Average length: {avg_length:.1f} ± {length_std:.1f} steps")
+        print(f"  Length range: {min(episode_lengths)} to {max(episode_lengths)} steps")
+
+        # Generate violin plots if plotting libraries are available
+        if PLOTTING_AVAILABLE and args.save_gif:
+            try:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+                # Reward violin plot
+                sns.violinplot(y=episode_rewards, ax=ax1, color='skyblue')
+                ax1.set_title(f'Reward Distribution\n{args.episodes} Episodes')
+                ax1.set_ylabel('Episode Reward')
+                ax1.grid(True, alpha=0.3)
+
+                # Episode length violin plot
+                sns.violinplot(y=episode_lengths, ax=ax2, color='lightgreen')
+                ax2.set_title(f'Episode Length Distribution\n{args.episodes} Episodes')
+                ax2.set_ylabel('Episode Length (steps)')
+                ax2.grid(True, alpha=0.3)
+
+                plt.tight_layout()
+
+                # Save the plot
+                model_name = args.model.split('/')[-1].split('.')[0] if args.model else 'random'
+                plot_path = os.path.join(args.gif_dir, f'{model_name}_violin_plots.png')
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                print(f"[PLOT] Violin plots saved to {plot_path}")
+
+                plt.close()
+
+            except Exception as e:
+                print(f"[WARNING] Failed to generate violin plots: {e}")
+
+        print("="*60)
 
 
 if __name__ == "__main__":
