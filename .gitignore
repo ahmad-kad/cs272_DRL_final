@@ -118,8 +118,8 @@ tmp/
 *~
 
 # Project-specific
-highway_distillation/outputs/
 *.monitor.csv
 plots/
-/tb_multi_scenario
-/tb_merge_v0
+outputs/models
+outputs/visualization
+logs
