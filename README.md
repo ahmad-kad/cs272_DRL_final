@@ -1,198 +1,149 @@
-# Urban Junction Environment
+````markdown
+# CS272 DRL – Highway & CopChase Environments
 
-A highway environment for autonomous driving research with procedural scenario generation and adversarial traffic.
+Highway-style driving tasks (highway / merge / intersection)
+Including Team 12's challenging CopChase “crazy driver” scenario
+
+---
 
 ## Installation
 
 ```bash
 pip install -r requirements.txt
-```
+````
 
-## Quick Start
+(Optional) Set up Weights & Biases if you want logging.
 
-```python
-from highway_distillation.environments.urban_junction_env import UrbanJunctionEnv
+---
 
-# Create environment
-env = UrbanJunctionEnv(config={
-    'scenario': 'highway',        # 'highway', 'merge', or 'intersection'
-    'observation_type': 'lidar',  # 'lidar' or 'grayscale'
-    'duration': 60,               # episode length in seconds
-    'vehicles_count': 10          # number of other vehicles
-})
+## Environments
 
-# Use the environment
-obs, info = env.reset()
-action = env.action_space.sample()  # 5 discrete actions
-obs, reward, terminated, truncated, info = env.step(action)
-```
+* **Highway / Merge / Intersection**
+  Gymnasium IDs: `highway-v0`, `merge-v0`, `intersection-v0` (from `highway_env`).
 
-## Environment Details
+  * Actions: 5 discrete controls – `LANE_LEFT`, `LANE_RIGHT`, `FASTER`, `SLOWER`, `IDLE`.
+  * Observations:
 
-### Actions (5 discrete)
-- `LANE_LEFT`, `LANE_RIGHT`, `FASTER`, `SLOWER`, `IDLE`
+    * `lidar`: compact vector with nearby vehicles.
+    * `grayscale`: rendered top-down image.
 
-### Observations
-- **Lidar**: 8 nearby vehicles (position, speed, presence) + optional context = 40-43 features
-- **Grayscale**: Visual input with configurable dimensions
-- **Frame stacking**: Optional 2-frame history
+* **MultiScenarioHighwayEnv** (`multi_scenario_env.py`)
+  Single env that randomly switches between highway / merge / intersection with adjustable traffic aggressiveness.
 
-### Rewards
-- Good speed (20-30 mph): +0.4
-- Bad speed: -0.3
-- Progress: +0.02 × speed
-- Collision: -1.0 (episode ends)
-- Red light violation: -0.4
-- Off-road: -0.3
-- Stage complete: +0.5
-- Episode success: +2.0
+* **CopChase-v0 (Crazy Driver)** (`team2_env/`)
+  Custom environment with pursuing police cars and dense traffic.
 
-### Scenarios
-- **Highway**: Straight road with varying lane counts and traffic
-- **Merge**: Highway with on-ramp merging scenarios
-- **Intersection**: Urban intersection with crossing traffic
+  * Continuous actions (steering, throttle).
+  * Kinematic observation with a Transformer feature extractor and reward wrapper to discourage crash exploitation.
 
-## Training
+---
 
-Train baseline agents:
+## Training & Evaluation Commands
+
+Recommended run order, numbered for reference.
+
+### Single-scenario PPO (Highway / Merge / Intersection)
 
 ```bash
-# Quick test
-python train_all_baselines.py --mode quick --env highway-v0 --obs Lidar --device cpu
+# 1. Train highway-v0, lidar
+python train_gpu.py highway lidar --steps 500000
 
-# Full training across all environments and observation types
-python train_all_baselines.py --all --mode standard --device cuda
+# 2. Evaluate highway-v0, lidar
+python evaluate_single.py highway lidar \
+  --model outputs/models/highway-v0_lidar_500k.zip \
+  --plot_id 2 --episodes 500
+
+# 3. Train highway-v0, grayscale
+python train_gpu.py highway grayscale --steps 500000
+
+# 4. Evaluate highway-v0, grayscale
+python evaluate_single.py highway grayscale \
+  --model outputs/models/highway-v0_grayscale_500k.zip \
+  --plot_id 4 --episodes 500
+
+# 5. Train merge-v0, lidar
+python train_gpu.py merge lidar --steps 500000
+
+# 6. Evaluate merge-v0, lidar
+python evaluate_single.py merge lidar \
+  --model outputs/models/merge-v0_lidar_500k.zip \
+  --plot_id 6 --episodes 500
+
+# 7. Train merge-v0, grayscale
+python train_gpu.py merge grayscale --steps 500000
+
+# 8. Evaluate merge-v0, grayscale
+python evaluate_single.py merge grayscale \
+  --model outputs/models/merge-v0_grayscale_500k.zip \
+  --plot_id 8 --episodes 500
+
+# 9. Train intersection-v0, lidar
+python train_gpu.py intersection lidar --steps 500000
+
+# 10. Evaluate intersection-v0, lidar
+python evaluate_single.py intersection lidar \
+  --model outputs/models/intersection-v0_lidar_500k.zip \
+  --plot_id 10 --episodes 500
+
+# 11. Train intersection-v0, grayscale
+python train_gpu.py intersection grayscale --steps 500000
+
+# 12. Evaluate intersection-v0, grayscale
+python evaluate_single.py intersection grayscale \
+  --model outputs/models/intersection-v0_grayscale_500k.zip \
+  --plot_id 12 --episodes 500
 ```
 
-## End-to-End Traffic Flow Learning
-
-This project features an advanced approach where **single agents automatically learn to recognize and adapt to traffic flow patterns** across multiple driving scenarios without explicit scenario detection.
-
-### Key Innovation
-
-Instead of training separate models for highway, merge, and intersection scenarios, we train **one neural network** that learns traffic patterns end-to-end:
-
-- **Highway Traffic**: Consistent forward/backward flow, lane-structured traffic
-- **Merge Scenarios**: Side-approaching vehicles, speed differentials, lane changes
-- **Intersection Dynamics**: Cross-traffic, perpendicular movement, complex interactions
-
-### Enhanced Multi-Environment Training
+### Multi-scenario PPO
 
 ```bash
-# Train single agent on all three scenarios simultaneously
-python train_highway_merge_intersection_multi_env.py
+# 13. Train multi-scenario PPO (lidar)
+python train_multi_scenario.py
+
+# 14. Evaluate multi-scenario PPO
+python evaluate_multi.py \
+  --model outputs/models/multi_scenario_lidar_500k.zip \
+  --plot_id 14 --episodes 500 --aggressiveness 1.0
 ```
 
-**Features:**
-- **Automatic Adaptation**: Network learns scenario patterns from lidar data automatically
-- **Comprehensive Metrics**: Episode-level tracking in WandB (rewards, collisions, survival, merge success)
-- **No Catastrophic Forgetting**: Simultaneous training avoids transfer learning degradation
-- **Real-time Charts**: Monitor learning progress across all scenarios
+### Crazy Driver / CopChase SAC
 
-### Expected Learning Progression
-
-1. **Early Training**: Basic highway driving (lane following, speed control)
-2. **Mid Training**: Merge behavior discovery (yielding, gap finding)
-3. **Late Training**: Intersection mastery (right-of-way, cross-traffic navigation)
-
-### WandB Metrics Dashboard
-
-The enhanced training provides detailed charts showing:
-- Episode rewards over training time
-- Collision rates and safety improvement
-- Survival rates (episodes completed without crashes)
-- Merge success rates in merge scenarios
-- Speed adaptation across different traffic conditions
-- Lane change behaviors and learning
-
-## SOTA TQC Training with Ego-Attention (CopChase-v0)
-
-For the challenging CopChase-v0 environment with aggressive traffic and police pursuit, we implement the **state-of-the-art TQC algorithm with Ego-Attention**:
-
-### Key Features
-- **TQC Algorithm**: Truncated Quantile Critics - distributional RL that handles crash risks
-- **Ego-Attention Policy**: Attention-based feature extractor focusing on immediate threats
-- **Reward Shaping**: Prevents suicide behavior through clamped penalties, survival bonuses, and direction incentives
-- **Direction Incentive**: Rewards driving within ±22.5° of 22.5° heading (0°-45° range) for angled lane discipline
-- **Resume Training**: Continue training from any checkpoint
-
-### Usage
 ```bash
-# Install TQC (recommended for best performance)
-pip install sb3-contrib
+# 15. Train SAC + Transformer on CopChase-v0
+python train_crazy_driver_sac.py --n_envs 4 --steps 500000
 
-# Train with TQC + Ego-Attention (200k steps recommended, memory optimized)
-python train_crazy_driver_tqc.py --steps 200000
-
-# Resume from checkpoint (continues training from saved model)
-python train_crazy_driver_tqc.py --resume_from outputs/models/checkpoints/tqc_ego_attention_checkpoint_80000_steps.zip --steps 120000
-
-# Quick test with single environment
-python train_crazy_driver_tqc.py --steps 1000 --n_envs 1 --no_wandb
-
-# Memory-optimized training (recommended for stability)
-python train_crazy_driver_tqc.py --steps 200000 --n_envs 2
-
-# CPU training (for systems without CUDA or GPU memory issues)
-python train_crazy_driver_tqc.py --cpu --steps 100000 --n_envs 1
-
-# Epoch training (split into smaller chunks for maximum stability)
-python train_crazy_driver_tqc.py --epochs 20 --epoch_steps 10000  # 20 epochs of 10k steps each
-python train_crazy_driver_tqc.py --epochs 10 --steps 200000      # 10 epochs from 200k total steps
+# 16. Visualize CopChase with a trained model
+python visualize_copchase.py \
+  --model outputs/models/crazy_driver_sac_safe_navigation-500k.zip
 ```
 
-### Resume Training
-The script supports resuming from any checkpoint saved during training. Checkpoints are automatically saved every 10,000 steps and include:
-- Model weights
-- Replay buffer (for experience replay)
-- VecNormalize statistics (for observation/reward normalization)
+---
 
-### Memory Optimizations
-The training script includes several memory optimizations for stability:
-- **Reduced buffer size**: 250k experiences (50% reduction)
-- **Smaller batch size**: 128 samples (50% reduction)
-- **Limited environments**: Max 2 parallel environments
-- **Periodic CUDA cache clearing**: Every 5000 steps
-- **Tighter observation clipping**: 5.0 for numerical stability
-- **Reduced target update frequency**: Every 2 steps for stability
+## Project Layout
 
-These optimizations prevent memory fragmentation and CUDA context loss during long training runs. For additional stability, use `--cpu` flag to train on CPU instead of GPU.
-
-### Epoch Training (Maximum Stability)
-For ultra-long training runs, use epoch training to split training into smaller chunks with memory clearing between each epoch:
-
-**Benefits:**
-- **Memory Reset**: Complete memory cleanup between epochs
-- **Fault Tolerance**: If one epoch crashes, others can continue
-- **Progress Preservation**: Automatic checkpointing between epochs
-- **Resource Management**: Prevents long-term memory leaks
-
-**Usage:**
-```bash
-# Train 1M steps in 50 epochs of 20k steps each
-python train_crazy_driver_tqc.py --epochs 50 --epoch_steps 20000
-
-# Resume epoch training from checkpoint
-python train_crazy_driver_tqc.py --epochs 30 --epoch_steps 20000 --resume_from checkpoint.zip
+```text
+.
+├── train.py                      # Simple single-env PPO training (CPU)
+├── train_gpu.py                  # Vectorized PPO training for highway/merge/intersection
+├── train_multi_scenario.py       # PPO on MultiScenarioHighwayEnv
+├── evaluate_single.py            # Evaluation + plotting for single scenarios
+├── evaluate_multi.py             # Evaluation + plotting for multi-scenario PPO
+├── visualize.py                  # Visualize single-scenario PPO policies
+├── visualize_multi_scenario.py   # Visualize multi-scenario PPO policy
+├── custom_policies.py            # Transformer feature extractor for CopChase
+├── train_crazy_driver_sac.py     # SAC training for CopChase-v0
+├── visualize_copchase.py         # Rollout / GIFs for CopChase-v0
+├── multi_scenario_env.py         # MultiScenarioHighwayEnv definition
+├── intersection_helpers.py       # Intersection safety wrapper
+├── multi_wandb_helpers.py        # W&B callbacks for multi-scenario training
+├── wandb_single_helpers.py       # W&B callbacks for single-scenario training
+├── team2_env/
+│   ├── crazy_driver_enviornment.py  # CopChase-v0 environment
+│   └── reward_wrapper.py            # Reward shaping for CopChase-v0
+└── requirements.txt
 ```
 
-Each epoch saves checkpoints and clears memory, ensuring maximum stability for overnight/weekend training runs.
-
-Use `--resume_from` to specify a checkpoint path, and `--steps` will be interpreted as additional steps to train.
-
-### Algorithm Comparison
-- **TQC**: Best for highway environments, handles tail risks (crashes) through quantile estimation
-- **PPO**: Stable but conservative, may avoid risky maneuvers needed for high-speed driving
-
-## Project Structure
+Models and plots are saved under `outputs/` (created automatically); W&B logging can be toggled with the `--no_wandb` flags in the training scripts.
 
 ```
-├── highway_distillation/
-│   ├── environments/          # Urban Junction environment
-│   ├── training/              # Training utilities
-│   └── tests/                 # Test suites
-├── train_*.py                 # Training scripts (including enhanced multi-env)
-├── run_*.py                   # Evaluation and utility scripts
-├── evaluate_*.py              # Comprehensive evaluation suites
-└── requirements.txt           # Dependencies
 ```
